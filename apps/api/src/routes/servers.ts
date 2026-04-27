@@ -75,6 +75,30 @@ const route: FastifyPluginAsync = async (app) => {
 
   app.post('/', async (req, reply) => {
     const body = ServerCreate.parse(req.body);
+
+    // Friendly precheck: only one *active* (not soft-deleted) row may exist
+    // for the same Azure target. The DB-level partial unique index is the
+    // real enforcer, but doing the check here gives the UI a clear message
+    // instead of a generic P2002 conflict.
+    const existing = await prisma.server.findFirst({
+      where: {
+        azureSubscriptionId: body.azureSubscriptionId,
+        azureResourceGroup: body.azureResourceGroup,
+        azureVmName: body.azureVmName,
+        deletedAt: null,
+      },
+      select: { id: true, name: true },
+    });
+    if (existing) {
+      return reply.status(409).send({
+        error: 'Conflict',
+        message:
+          `An active server already exists for this Azure VM ` +
+          `(id=${existing.id}, name=${existing.name}). Remove it first if ` +
+          `you want to re-add it.`,
+      });
+    }
+
     const created = await prisma.server.create({
       data: {
         azureSubscriptionId: body.azureSubscriptionId,

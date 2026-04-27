@@ -91,7 +91,12 @@ model Server {
   jobs          Job[]
   runResults    RunResult[]
 
-  @@unique([azureSubscriptionId, azureResourceGroup, azureVmName], name: "uniq_server_azure_target")
+  // NOTE: uniqueness on (azureSubscriptionId, azureResourceGroup, azureVmName)
+  // is enforced by a *partial* unique index (`uniq_active_server_azure_target`)
+  // that excludes soft-deleted rows (deleted_at IS NOT NULL). This lets a
+  // server be removed and re-added without colliding with the archived row.
+  // The partial index can't be expressed in Prisma syntax, hence the manual
+  // migration `20260428084500_server_partial_unique`.
   @@index([status])
   @@map("servers")
 }
