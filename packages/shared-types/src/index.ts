@@ -109,6 +109,164 @@ export const ServerSummary = z.object({
 });
 export type ServerSummary = z.infer<typeof ServerSummary>;
 
+export const ServerCreate = z.object({
+  azureSubscriptionId: z.string().min(1),
+  azureResourceGroup: z.string().min(1),
+  azureVmName: z.string().min(1),
+  name: z.string().min(1).optional(),
+  labels: z.record(z.string(), z.unknown()).optional(),
+});
+export type ServerCreate = z.infer<typeof ServerCreate>;
+
+export const ProvisionTokenResponse = z.object({
+  token: z.string(),
+  expiresAt: z.string().datetime(),
+});
+export type ProvisionTokenResponse = z.infer<typeof ProvisionTokenResponse>;
+
+// -----------------------------------------------------------------------------
+// Config DTOs
+// -----------------------------------------------------------------------------
+export const ConfigRevisionSummary = z.object({
+  id: z.string().uuid(),
+  configId: z.string().uuid(),
+  version: z.number().int().positive(),
+  sourceSha256: z.string(),
+  semanticSha256: z.string(),
+  requiredModules: z.array(RequiredModule),
+  parsedResources: z.array(ParsedResource),
+  createdAt: z.string().datetime(),
+});
+export type ConfigRevisionSummary = z.infer<typeof ConfigRevisionSummary>;
+
+export const ConfigRevisionDetail = ConfigRevisionSummary.extend({
+  yamlBody: z.string(),
+});
+export type ConfigRevisionDetail = z.infer<typeof ConfigRevisionDetail>;
+
+export const ConfigSummary = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  description: z.string().nullable(),
+  currentRevision: ConfigRevisionSummary.nullable(),
+  assignmentCount: z.number().int().nonnegative().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type ConfigSummary = z.infer<typeof ConfigSummary>;
+
+export const ConfigCreate = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  yamlBody: z.string().min(1),
+});
+export type ConfigCreate = z.infer<typeof ConfigCreate>;
+
+export const ConfigUpdate = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  yamlBody: z.string().min(1).optional(),
+});
+export type ConfigUpdate = z.infer<typeof ConfigUpdate>;
+
+// -----------------------------------------------------------------------------
+// Assignment DTOs
+// -----------------------------------------------------------------------------
+export const AssignmentSummary = z.object({
+  id: z.string().uuid(),
+  serverId: z.string().uuid(),
+  configId: z.string().uuid(),
+  pinnedRevisionId: z.string().uuid().nullable(),
+  generation: z.number().int().positive(),
+  intervalMinutes: z.number().int().positive(),
+  enabled: z.boolean(),
+  lifecycleState: AssignmentLifecycleState,
+  prereqStatus: AssignmentPrereqStatus,
+  lastStatus: AssignmentLastStatus,
+  lastExitCode: z.number().int().nullable(),
+  nextDueAt: z.string().datetime().nullable(),
+  lastRunAt: z.string().datetime().nullable(),
+  lastSuccessAt: z.string().datetime().nullable(),
+  lastFailureAt: z.string().datetime().nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  // Optional joined view fields
+  configName: z.string().optional(),
+  serverName: z.string().optional(),
+});
+export type AssignmentSummary = z.infer<typeof AssignmentSummary>;
+
+export const AssignmentCreate = z.object({
+  serverId: z.string().uuid(),
+  configId: z.string().uuid(),
+  intervalMinutes: z.number().int().positive().optional(),
+});
+export type AssignmentCreate = z.infer<typeof AssignmentCreate>;
+
+export const AssignmentUpdate = z.object({
+  intervalMinutes: z.number().int().positive().optional(),
+  enabled: z.boolean().optional(),
+});
+export type AssignmentUpdate = z.infer<typeof AssignmentUpdate>;
+
+// -----------------------------------------------------------------------------
+// Job DTO
+// -----------------------------------------------------------------------------
+export const JobSummary = z.object({
+  id: z.string().uuid(),
+  serverId: z.string().uuid().nullable(),
+  type: JobType,
+  status: JobStatus,
+  payload: z.record(z.string(), z.unknown()),
+  log: z.string().nullable(),
+  attempts: z.number().int().nonnegative(),
+  errorCode: z.string().nullable(),
+  requestedAt: z.string().datetime(),
+  startedAt: z.string().datetime().nullable(),
+  finishedAt: z.string().datetime().nullable(),
+});
+export type JobSummary = z.infer<typeof JobSummary>;
+
+// -----------------------------------------------------------------------------
+// Run result + module + audit DTOs
+// -----------------------------------------------------------------------------
+export const RunResultSummary = z.object({
+  id: z.string().uuid(),
+  assignmentId: z.string().uuid(),
+  serverId: z.string().uuid(),
+  configRevisionId: z.string().uuid(),
+  generation: z.number().int(),
+  runId: z.string().uuid(),
+  exitCode: z.number().int(),
+  hadErrors: z.boolean(),
+  inDesiredState: z.boolean(),
+  durationMs: z.number().int(),
+  startedAt: z.string().datetime(),
+  finishedAt: z.string().datetime(),
+  dscOutput: z.unknown().optional(),
+});
+export type RunResultSummary = z.infer<typeof RunResultSummary>;
+
+export const ServerModuleSummary = z.object({
+  serverId: z.string().uuid(),
+  name: z.string(),
+  installedVersion: z.string(),
+  discoveredAt: z.string().datetime(),
+});
+export type ServerModuleSummary = z.infer<typeof ServerModuleSummary>;
+
+export const AuditEventSummary = z.object({
+  id: z.string().uuid(),
+  eventType: z.string(),
+  entityType: z.string(),
+  entityId: z.string().nullable(),
+  actorType: ActorType,
+  actorId: z.string().nullable(),
+  payload: z.record(z.string(), z.unknown()),
+  createdAt: z.string().datetime(),
+});
+export type AuditEventSummary = z.infer<typeof AuditEventSummary>;
+
 // -----------------------------------------------------------------------------
 // WebSocket envelope
 // -----------------------------------------------------------------------------

@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: dsc-fleet
+data:
+  API_PORT: "3000"
+  LOG_LEVEL: info
+  NODE_ENV: production
+  AGENT_POLL_DEFAULT_SECONDS: "60"
+  OFFLINE_MULTIPLIER: "3"
+  DEFAULT_ASSIGNMENT_INTERVAL_MINUTES: "15"
+  AZURE_RUNCOMMAND_TIMEOUT_MINUTES: "30"
+  REMOVAL_ACK_TIMEOUT_MINUTES: "60"
+  DSC_CONFIG_SCHEMA_URL: https://aka.ms/dsc/schemas/v3/bundled/config/document.json
+---
+# Azure Service Principal for arm-compute Run Command calls.
+# Leave empty to disable Azure operations (api still starts; /healthz reports azure:unconfigured).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: azure-credentials
+  namespace: dsc-fleet
+type: Opaque
+stringData:
+  AZURE_TENANT_ID: ""
+  AZURE_CLIENT_ID: ""
+  AZURE_CLIENT_SECRET: ""
