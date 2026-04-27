@@ -1,0 +1,279 @@
+// Prisma schema for dsc-fleet-dashboard
+//
+// All timestamps are `timestamptz`. The partial unique index on
+// `assignments(server_id, config_id) WHERE lifecycle_state IN ('active','removing')`
+// is created in a separate raw-SQL migration (see prisma/migrations/...).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ServerStatus {
+  pending
+  provisioning
+  ready
+  error
+  offline
+}
+
+enum AssignmentLifecycleState {
+  active
+  removing
+  removed
+  removal_expired
+}
+
+enum AssignmentPrereqStatus {
+  unknown
+  installing
+  ready
+  failed
+}
+
+enum AssignmentLastStatus {
+  success
+  drift
+  error
+  never
+}
+
+enum JobType {
+  provision
+  prereq_install      @map("prereq-install")
+  module_install      @map("module-install")
+  config_apply        @map("config-apply")
+  uninstall_config    @map("uninstall-config")
+}
+
+enum JobStatus {
+  queued
+  running
+  success
+  failed
+  cancelled
+}
+
+enum ActorType {
+  ui
+  agent
+  system
+}
+
+model Server {
+  id                  String   @id @default(uuid()) @db.Uuid
+  name                String
+  azureSubscriptionId String   @map("azure_subscription_id")
+  azureResourceGroup  String   @map("azure_resource_group")
+  azureVmName         String   @map("azure_vm_name")
+  agentId             String   @unique @default(uuid()) @map("agent_id") @db.Uuid
+
+  hostname            String?
+  osCaption           String?  @map("os_caption")
+  osVersion           String?  @map("os_version")
+
+  status              ServerStatus @default(pending)
+  lastHeartbeatAt     DateTime?    @map("last_heartbeat_at") @db.Timestamptz(6)
+  lastError           String?      @map("last_error")
+
+  labels              Json     @default("{}")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt       @map("updated_at") @db.Timestamptz(6)
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  agentKeys     AgentKey[]
+  modules       ServerModule[]
+  assignments   Assignment[]
+  jobs          Job[]
+  runResults    RunResult[]
+
+  @@unique([azureSubscriptionId, azureResourceGroup, azureVmName], name: "uniq_server_azure_target")
+  @@index([status])
+  @@map("servers")
+}
+
+model AgentKey {
+  id          String   @id @default(uuid()) @db.Uuid
+  serverId    String   @map("server_id") @db.Uuid
+  keyHash     String   @map("key_hash")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastUsedAt  DateTime? @map("last_used_at") @db.Timestamptz(6)
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(6)
+
+  server      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@index([serverId])
+  @@index([keyHash])
+  @@map("agent_keys")
+}
+
+model ServerModule {
+  serverId          String   @map("server_id") @db.Uuid
+  name              String
+  installedVersion  String   @map("installed_version")
+  discoveredAt      DateTime @default(now()) @map("discovered_at") @db.Timestamptz(6)
+
+  server            Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@id([serverId, name])
+  @@map("server_modules")
+}
+
+model Config {
+  id                  String   @id @default(uuid()) @db.Uuid
+  name                String
+  description         String?
+  currentRevisionId   String?  @unique @map("current_revision_id") @db.Uuid
+
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt       @map("updated_at") @db.Timestamptz(6)
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  currentRevision     ConfigRevision?  @relation("CurrentRevision", fields: [currentRevisionId], references: [id], onDelete: SetNull)
+  revisions           ConfigRevision[] @relation("ConfigRevisions")
+  assignments         Assignment[]
+
+  @@map("configs")
+}
+
+model ConfigRevision {
+  id                String   @id @default(uuid()) @db.Uuid
+  configId          String   @map("config_id") @db.Uuid
+  version           Int
+
+  yamlBody          String   @map("yaml_body")
+  sourceSha256      String   @map("source_sha256")
+  semanticSha256    String   @map("semantic_sha256")
+  requiredModules   Json     @default("[]") @map("required_modules")
+  parsedResources   Json     @default("[]") @map("parsed_resources")
+
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  config            Config   @relation("ConfigRevisions", fields: [configId], references: [id], onDelete: Cascade)
+  currentOf         Config?  @relation("CurrentRevision")
+
+  pinnedAssignments Assignment[]
+  runResults        RunResult[]
+
+  @@unique([configId, version], name: "uniq_config_version")
+  @@index([configId])
+  @@map("config_revisions")
+}
+
+model Assignment {
+  id                   String   @id @default(uuid()) @db.Uuid
+  serverId             String   @map("server_id") @db.Uuid
+  configId             String   @map("config_id") @db.Uuid
+  pinnedRevisionId     String?  @map("pinned_revision_id") @db.Uuid
+
+  generation           Int      @default(1)
+  intervalMinutes      Int      @default(15) @map("interval_minutes")
+  enabled              Boolean  @default(true)
+
+  lifecycleState       AssignmentLifecycleState @default(active) @map("lifecycle_state")
+  prereqStatus         AssignmentPrereqStatus   @default(unknown) @map("prereq_status")
+
+  nextDueAt            DateTime? @map("next_due_at") @db.Timestamptz(6)
+  lastRunAt            DateTime? @map("last_run_at") @db.Timestamptz(6)
+  lastSuccessAt        DateTime? @map("last_success_at") @db.Timestamptz(6)
+  lastFailureAt        DateTime? @map("last_failure_at") @db.Timestamptz(6)
+
+  lastStatus           AssignmentLastStatus @default(never) @map("last_status")
+  lastExitCode         Int?      @map("last_exit_code")
+
+  removalRequestedAt   DateTime? @map("removal_requested_at") @db.Timestamptz(6)
+  removalAckAt         DateTime? @map("removal_ack_at") @db.Timestamptz(6)
+
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime @updatedAt       @map("updated_at") @db.Timestamptz(6)
+  removedAt            DateTime? @map("removed_at") @db.Timestamptz(6)
+
+  server               Server          @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  config               Config          @relation(fields: [configId], references: [id], onDelete: Cascade)
+  pinnedRevision       ConfigRevision? @relation(fields: [pinnedRevisionId], references: [id], onDelete: SetNull)
+  runResults           RunResult[]
+
+  @@index([serverId])
+  @@index([configId])
+  @@index([lifecycleState])
+  @@index([nextDueAt])
+  // NOTE: the partial unique
+  //   UNIQUE (server_id, config_id) WHERE lifecycle_state IN ('active','removing')
+  // is created in a custom raw-SQL migration; Prisma can't express it.
+  @@map("assignments")
+}
+
+model Job {
+  id          String    @id @default(uuid()) @db.Uuid
+  serverId    String?   @map("server_id") @db.Uuid
+  type        JobType
+  status      JobStatus @default(queued)
+  payload     Json      @default("{}")
+  log         String?
+  attempts    Int       @default(0)
+  errorCode   String?   @map("error_code")
+  requestedAt DateTime  @default(now()) @map("requested_at") @db.Timestamptz(6)
+  startedAt   DateTime? @map("started_at") @db.Timestamptz(6)
+  finishedAt  DateTime? @map("finished_at") @db.Timestamptz(6)
+
+  server      Server? @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@index([serverId])
+  @@index([status])
+  @@index([type])
+  @@map("jobs")
+}
+
+model RunResult {
+  id                 String   @id @default(uuid()) @db.Uuid
+  assignmentId       String   @map("assignment_id") @db.Uuid
+  serverId           String   @map("server_id") @db.Uuid
+  configRevisionId   String   @map("config_revision_id") @db.Uuid
+  generation         Int
+  runId              String   @map("run_id") @db.Uuid
+
+  exitCode           Int      @map("exit_code")
+  hadErrors          Boolean  @map("had_errors")
+  inDesiredState     Boolean  @map("in_desired_state")
+  durationMs         Int      @map("duration_ms")
+  dscOutput          Json     @default("{}") @map("dsc_output")
+
+  startedAt          DateTime @map("started_at") @db.Timestamptz(6)
+  finishedAt         DateTime @map("finished_at") @db.Timestamptz(6)
+
+  assignment         Assignment      @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  server             Server          @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  configRevision     ConfigRevision  @relation(fields: [configRevisionId], references: [id], onDelete: Restrict)
+
+  @@index([assignmentId])
+  @@index([serverId])
+  @@index([finishedAt])
+  @@map("run_results")
+}
+
+model AuditEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  eventType   String    @map("event_type")
+  entityType  String    @map("entity_type")
+  entityId    String?   @map("entity_id")
+  actorType   ActorType @map("actor_type")
+  actorId     String?   @map("actor_id")
+  payload     Json      @default("{}")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([entityId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_events")
+}
+
+model Setting {
+  key   String @id
+  value Json
+
+  @@map("settings")
+}
