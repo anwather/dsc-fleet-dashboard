@@ -1,114 +1,87 @@
-# dsc-fleet-dashboard
+# DSC v3 Fleet Dashboard
 
-Self-hostable management dashboard for [DSC v3](https://aka.ms/dsc) on Windows Server fleets.
+A self-hostable web dashboard for managing Windows Server fleets with
+[PowerShell DSC v3](https://learn.microsoft.com/powershell/dsc/overview).
+Use it to onboard Azure-hosted Windows VMs, author DSC v3 configurations
+in YAML, assign them to servers on a polling schedule, and monitor drift
+and run results — all from a single React UI backed by a Fastify + Postgres
+api.
 
-This is the **Phase 2** companion to [`dsc-fleet`](https://github.com/anwather/dsc-fleet) and
-[`dsc-fleet-configs`](https://github.com/anwather/dsc-fleet-configs). Phase 1 agents pull config
-YAML from a public Git URL; this dashboard is an **opt-in alternative delivery path** — agents
-register, pull assignments + config bodies from the dashboard API, and post results back.
+This repository is published as a **template**. The expectation is that
+you fork it into your own org, point a few URLs at your own GitHub
+repos and Azure subscription (see
+[docs/template-customisation.md](docs/template-customisation.md)), and run
+your fork. There is no hosted service.
 
-> Status: **early scaffolding (Phase 2 backend foundation).** Frontend and agent endpoints land
-> in subsequent commits.
+## Quickstart
 
-## Features (planned)
+### Docker Compose
 
-- One-click provisioning of Azure VMs with the DSC v3 prereqs (via Azure Run-Command).
-- Author / upload configs in a Monaco editor; immutable revisions; per-assignment intervals.
-- Per-server compliance, drift, last-run, and module-prereq status.
-- WebSocket live updates; Postgres is the source of truth.
-- Zero hardcoded org / subscription IDs — everything `.env`-driven.
-
-## Architecture (short)
-
-```
-                  +------------------+
-                  |   Web (React)    |  ← scaffold incoming
-                  +---------+--------+
-                            | HTTP + /ws
-                  +---------v--------+      +---------------------+
-                  |  API (Fastify)   |----->|  Postgres (Prisma)  |
-                  +---+----------+---+      +---------------------+
-                      |          |
-   @azure/arm-compute |          | Bearer (agent_api_key)
-                      v          v
-              +-------+--+   +---+------------------+
-              | Azure VM |   |  Windows Server      |
-              | (Run-Cmd)|   |  Invoke-DscRunner.ps1|
-              +----------+   |  -Mode Dashboard     |
-                             +----------------------+
-```
-
-See `docs/` (coming soon) for full architecture and getting-started.
-
-## Repository layout
-
-```
-dsc-fleet-dashboard/
-├─ apps/
-│  ├─ api/                # Node 20 + Fastify + Prisma + node-cron + ws
-│  └─ web/                # React (scaffold incoming)
-├─ packages/
-│  └─ shared-types/       # DTOs shared between api + web
-├─ docs/                  # getting-started, architecture, customisation
-├─ docker-compose.yml     # postgres + api + web
-└─ .env.example           # copy to .env before `up`
-```
-
-## Quick start (5 minutes)
-
-> Requires Docker 24+ and ports `3000` (api), `5432` (postgres), `8080` (web placeholder) free.
-
-```bash
+```pwsh
 git clone https://github.com/anwather/dsc-fleet-dashboard.git
 cd dsc-fleet-dashboard
-cp .env.example .env
-# Optional: edit .env to add AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET
+Copy-Item .env.example .env
+# edit .env to add AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET
 docker compose up --build
 ```
 
-Then:
+Then browse <http://localhost:8080>. See
+[docs/getting-started.md](docs/getting-started.md) for the full
+walkthrough including adding your first server, authoring a config from a
+sample, and the assignment matrix.
 
-- Health check: <http://localhost:3000/healthz>
-- Web placeholder: <http://localhost:8080/>
+### minikube
 
-The API container runs `prisma migrate deploy` at startup, so the schema is always current
-against the bundled Postgres on first up.
+If you'd rather run on a local Kubernetes, see
+[`k8s/README.md`](k8s/README.md) for the manifest set and minikube loop.
+The cluster bundles a single-replica Postgres `StatefulSet` with a PVC for
+durable storage between `minikube stop` cycles.
 
-## Configuration
+## Documentation
 
-All runtime config lives in `.env`. See `.env.example` for the full list, including:
+| Document | What's in it |
+| --- | --- |
+| [Getting started](docs/getting-started.md) | Prerequisites, two install paths, end-to-end first-time walkthrough, troubleshooting. |
+| [Architecture](docs/architecture.md) | Component diagram, data model, lifecycle state machines, design rationale. |
+| [Template customisation](docs/template-customisation.md) | The handful of URLs, env vars, and code locations you'll edit when forking. |
+| [Security posture](docs/security-posture.md) | v1 trust model (no auth, internal-only) and v2 hardening backlog. |
+| [Kubernetes deployment](k8s/README.md) | minikube quickstart and per-manifest explanation. |
 
-- `DATABASE_URL` — Postgres connection string (defaults to bundled).
-- `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` — service principal for
-  Run-Command. Optional; without these the API boots but provisioning endpoints fail closed.
-- `AGENT_POLL_DEFAULT_SECONDS`, `OFFLINE_MULTIPLIER`, `DEFAULT_ASSIGNMENT_INTERVAL_MINUTES`.
+## Repository layout
 
-## Required Azure RBAC
+| Path | Contents |
+| --- | --- |
+| [`apps/api`](apps/api) | Fastify 5 api: routes, services, scheduler, Prisma schema and migrations. |
+| [`apps/web`](apps/web) | React 18 + Vite + Tailwind UI. Built into static assets and served by nginx. |
+| [`packages/shared-types`](packages/shared-types) | TypeScript types shared between api and web (assignment, run-result, audit, ws-event). |
+| [`k8s`](k8s) | Kubernetes manifests for minikube / lab clusters. |
+| [`docs`](docs) | This documentation. |
+| [`.env.example`](.env.example) | Documented environment variables for the api container. |
+| [`docker-compose.yml`](docker-compose.yml) | Bundled Postgres + api + web stack. |
 
-The service principal (or developer identity) used by the API needs, on every target VM:
+## Companion repositories
 
-- `Microsoft.Compute/virtualMachines/runCommand/action`
+The dashboard is one of three repos that make up the fleet system:
 
-Built-in role: **Virtual Machine Contributor** (or a custom role with that one action if you
-want to be tighter).
+- **[`anwather/dsc-fleet-dashboard`](https://github.com/anwather/dsc-fleet-dashboard)** —
+  this repo. The web UI + api.
+- **[`anwather/dsc-fleet`](https://github.com/anwather/dsc-fleet)** —
+  the PowerShell agent and bootstrap scripts. The dashboard's provision
+  job downloads `Install-Prerequisites.ps1`, `Install-DscV3.ps1`, and
+  `Register-DashboardAgent.ps1` from the `bootstrap/` folder of this repo
+  and runs them on the target VM via Azure Run-Command. The agent's
+  scheduled task (`Invoke-DscRunner.ps1 -Mode Dashboard`) implements the
+  poll / fetch-revision / run / post-result loop.
+- **[`anwather/dsc-fleet-configs`](https://github.com/anwather/dsc-fleet-configs)** —
+  sample DSC v3 configurations. The eight starter samples surfaced by the
+  Configs editor in this dashboard mirror the patterns committed there;
+  the agent's Phase-1 `-Mode Git` also pulls directly from this repo.
 
-## Security posture (v1)
-
-- **No authentication on UI routes** — designed for internal/private networks. Put behind your
-  own reverse proxy with TLS + auth if exposing.
-- **Per-agent API keys** are hashed at rest, multi-active to support rotation, and required as
-  `Bearer` on all `/api/agents/*` endpoints.
-- **Do not store secrets in config YAML.** DB backups contain config bodies. The UI surfaces
-  a heuristic warning on save.
-
-## Development
-
-```bash
-npm install                       # installs all workspaces
-npm -w @dsc-fleet/api run build   # type-check + emit dist/
-npm -w @dsc-fleet/api run dev     # ts-node dev server (requires local Postgres)
-```
+When you fork the dashboard for your own deployment, you'll typically
+fork all three. See
+[docs/template-customisation.md](docs/template-customisation.md) for the
+exact URLs to update.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE).
