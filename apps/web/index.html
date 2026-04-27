@@ -2,18 +2,23 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>dsc-fleet-dashboard</title>
-    <style>
-      body { font-family: system-ui, sans-serif; max-width: 640px; margin: 4rem auto; padding: 0 1rem; color: #1f2937; }
-      code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 4px; }
-      .muted { color: #6b7280; }
-    </style>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DSC v3 Fleet Dashboard</title>
+    <script>
+      // Apply theme before paint to avoid flash.
+      (function () {
+        try {
+          var t = localStorage.getItem('dsc-theme');
+          if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (_) {}
+      })();
+    </script>
   </head>
   <body>
-    <h1>dsc-fleet-dashboard</h1>
-    <p>Frontend scaffold incoming. The API is reachable at
-      <code>http://localhost:3000/healthz</code>.</p>
-    <p class="muted">This page is served by the placeholder <code>web</code>
-      container. Replace it with the React app when Phase 2 frontend lands.</p>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
