@@ -1,0 +1,28 @@
+node_modules/
+**/node_modules/
+.env
+.env.local
+apps/api/.env
+apps/web/.env
+dist/
+build/
+**/dist/
+**/build/
+.DS_Store
+*.log
+.vite/
+# Prisma
+apps/api/prisma/.cache/
+# Editor
+.vscode/
+.idea/
+*.swp
+# Coverage
+coverage/
+# Build cache
+.tsbuildinfo
+**/*.tsbuildinfo
+# Docker volumes (anything local)
+.docker-data/
+# YAML schema cache
+schemas-cache/
