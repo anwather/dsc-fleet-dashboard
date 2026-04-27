@@ -100,6 +100,30 @@ flow will fail closed (see [Troubleshooting](#troubleshooting)).
 
 The root path redirects to the **Servers** page.
 
+### 5. (Local dev only) Expose the dashboard to a remote VM
+
+If your dev workstation runs the dashboard on `localhost` but the lab VM lives
+in Azure, the VM has no route back to your loopback. For **short-lived local
+development and validation only** you can use a Cloudflare Quick Tunnel to
+hand the VM a temporary public URL:
+
+```pwsh
+# Requires cloudflared (winget install Cloudflare.cloudflared).
+# Hands out a throwaway https://<random>.trycloudflare.com that proxies to :8080.
+# No Cloudflare account, no DNS, no auth.
+cloudflared tunnel --url http://localhost:8080
+```
+
+Use the printed `https://*.trycloudflare.com` URL as the dashboard URL when
+you call `Register-DashboardAgent.ps1` on the VM (or set it as the API's
+externally-visible base URL so provision jobs hand it to the VM).
+
+> **This is not for real deployments.** The URL is unauthenticated, public to
+> anyone who guesses it, and dies the moment `cloudflared` exits. For any
+> real fleet host the dashboard on stable infrastructure (the
+> [`k8s/`](../k8s/) manifests, App Service, etc.) and put auth in front.
+> See [security-posture.md](security-posture.md).
+
 ## Path 2 — minikube
 
 For lab environments where you want persistent Postgres storage that survives
@@ -282,7 +306,8 @@ JSON output.
    - `Register-DashboardAgent failed` with a `Connection refused` — the VM
      can't reach the dashboard URL the api passed it
      (`req.protocol://req.headers.host`). Behind NAT? Set `WEB_PORT` /
-     publish a reverse-proxy URL and rerun.
+     publish a reverse-proxy URL and rerun. For local dev see
+     [step 5 — Expose the dashboard](#5-local-dev-only-expose-the-dashboard-to-a-remote-vm).
    - `provision token expired` (job `errorCode = TokenExpired`) — token
      lifetime is `AZURE_RUNCOMMAND_TIMEOUT_MINUTES` minutes from issue. Rerun
      **Provision** to mint a fresh one.

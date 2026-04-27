@@ -24,5 +24,8 @@ coverage/
 **/*.tsbuildinfo
 # Docker volumes (anything local)
 .docker-data/
+# Local dev scratch (e.g. cloudflared tunnel state from validate scripts).
+# Never used by a real deployment.
+.tmp/
 # YAML schema cache
 schemas-cache/
