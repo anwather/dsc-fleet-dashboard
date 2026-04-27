@@ -166,6 +166,7 @@ $cfgKeys = @(
     'DEFAULT_ASSIGNMENT_INTERVAL_MINUTES',
     'AZURE_RUNCOMMAND_TIMEOUT_MINUTES',
     'REMOVAL_ACK_TIMEOUT_MINUTES',
+    'PUBLIC_BASE_URL',
     'DSC_CONFIG_SCHEMA_URL'
 )
 
@@ -183,6 +184,10 @@ $cfgDefaults = @{
 
 $dataLines = foreach ($key in $cfgKeys) {
     $value = if ($env[$key]) { $env[$key] } else { $cfgDefaults[$key] }
+    # Skip keys with no value and no default — emitting empty strings into
+    # the ConfigMap would break zod validators for typed URL/number fields
+    # (e.g. PUBLIC_BASE_URL with .url()).
+    if (-not $value) { continue }
     # ConfigMap values must be strings; quote to avoid YAML number/bool coercion.
     "  ${key}: ""$value"""
 }

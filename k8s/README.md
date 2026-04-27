@@ -175,6 +175,26 @@ What the script does:
 Re-running the script is idempotent — every step uses `kubectl apply`. PVC
 data is never touched.
 
+### Public URL for agent provisioning
+
+When the dashboard is fronted by a tunnel/ingress (e.g. cloudflared,
+`https://dsc.example.com`), set `PUBLIC_BASE_URL` in `.env` so the
+provision job hands the agent the externally-reachable URL instead of
+falling back to the request's `Host` header (which on a `kubectl
+port-forward` is `https://127.0.0.1` and useless to a remote VM).
+
+```bash
+PUBLIC_BASE_URL=https://dsc.example.com
+```
+
+After editing `.env`, re-run `Apply-FromEnv.ps1` and restart the api so
+the new ConfigMap is picked up:
+
+```pwsh
+.\k8s\Apply-FromEnv.ps1
+kubectl -n dsc-fleet rollout restart deployment/api
+```
+
 Optional flags:
 
 ```pwsh

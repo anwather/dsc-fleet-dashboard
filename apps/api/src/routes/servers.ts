@@ -169,7 +169,8 @@ const route: FastifyPluginAsync = async (app) => {
 
     const token = generateToken(32);
     const expiresAt = new Date(Date.now() + env.AZURE_RUNCOMMAND_TIMEOUT_MINUTES * 60_000);
-    const dashboardUrl = `${req.protocol}://${req.headers.host ?? 'localhost'}`;
+    const dashboardUrl =
+      env.PUBLIC_BASE_URL ?? `${req.protocol}://${req.headers.host ?? 'localhost'}`;
 
     const jobId = await createProvisionJob(s.id, {
       token,
@@ -202,7 +203,8 @@ const route: FastifyPluginAsync = async (app) => {
 
     const token = generateToken(32);
     const expiresAt = new Date(Date.now() + env.AZURE_RUNCOMMAND_TIMEOUT_MINUTES * 60_000);
-    const dashboardUrl = `${req.protocol}://${req.headers.host ?? 'localhost'}`;
+    const dashboardUrl =
+      env.PUBLIC_BASE_URL ?? `${req.protocol}://${req.headers.host ?? 'localhost'}`;
 
     const jobId = await createProvisionJob(s.id, {
       token,
