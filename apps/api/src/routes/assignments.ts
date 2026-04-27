@@ -1,12 +1,252 @@
+/**
+ * UI-facing /api/assignments routes.
+ *
+ * Lifecycle invariants:
+ *   - active     — agent is applying the config on its interval
+ *   - removing   — uninstall requested; agent must ack within 15*intervalMinutes
+ *   - removed    — agent ack'd
+ *   - removal_expired — agent never ack'd (scheduler-driven transition)
+ *
+ * Re-creating an assignment for the same (server, config) after it was removed
+ * bumps the `generation` so old run results / agent retries are ignored.
+ */
 import type { FastifyPluginAsync } from 'fastify';
-import { notImplemented } from './_stub.js';
+import { z } from 'zod';
+import { prisma } from '../lib/prisma.js';
+import { loadEnv } from '../lib/env.js';
+import { reconcileAssignmentPrereq } from '../services/scheduler.js';
+
+const AssignmentCreate = z.object({
+  serverId: z.string().uuid(),
+  configId: z.string().uuid(),
+  intervalMinutes: z.number().int().positive().optional(),
+});
+
+const AssignmentUpdate = z.object({
+  intervalMinutes: z.number().int().positive().optional(),
+  enabled: z.boolean().optional(),
+});
+
+interface AssignmentLite {
+  id: string;
+  serverId: string;
+  configId: string;
+  pinnedRevisionId: string | null;
+  generation: number;
+  intervalMinutes: number;
+  enabled: boolean;
+  lifecycleState: string;
+  prereqStatus: string;
+  lastStatus: string;
+  lastExitCode: number | null;
+  nextDueAt: Date | null;
+  lastRunAt: Date | null;
+  lastSuccessAt: Date | null;
+  lastFailureAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+function shape(a: AssignmentLite) {
+  return {
+    id: a.id,
+    serverId: a.serverId,
+    configId: a.configId,
+    pinnedRevisionId: a.pinnedRevisionId,
+    generation: a.generation,
+    intervalMinutes: a.intervalMinutes,
+    enabled: a.enabled,
+    lifecycleState: a.lifecycleState,
+    prereqStatus: a.prereqStatus,
+    lastStatus: a.lastStatus,
+    lastExitCode: a.lastExitCode,
+    nextDueAt: a.nextDueAt?.toISOString() ?? null,
+    lastRunAt: a.lastRunAt?.toISOString() ?? null,
+    lastSuccessAt: a.lastSuccessAt?.toISOString() ?? null,
+    lastFailureAt: a.lastFailureAt?.toISOString() ?? null,
+    createdAt: a.createdAt.toISOString(),
+    updatedAt: a.updatedAt.toISOString(),
+  };
+}
 
 const route: FastifyPluginAsync = async (app) => {
-  app.get('/', notImplemented('listAssignments'));
-  app.post('/', notImplemented('createAssignment'));
-  app.patch('/:id', notImplemented('updateAssignment'));
-  app.delete('/:id', notImplemented('deleteAssignment'));
-  app.post('/:id/force-remove', notImplemented('forceRemoveAssignment'));
+  app.get<{ Querystring: { serverId?: string; configId?: string; lifecycleState?: string } }>(
+    '/',
+    async (req, reply) => {
+      const where: Record<string, unknown> = {};
+      if (req.query.serverId) where.serverId = req.query.serverId;
+      if (req.query.configId) where.configId = req.query.configId;
+      if (req.query.lifecycleState) where.lifecycleState = req.query.lifecycleState;
+      const rows = await prisma.assignment.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          server: { select: { name: true } },
+          config: { select: { name: true } },
+        },
+      });
+      return reply.send(
+        rows.map((a) => ({
+          ...shape(a),
+          serverName: a.server?.name,
+          configName: a.config?.name,
+        })),
+      );
+    },
+  );
+
+  app.get<{ Params: { id: string } }>('/:id', async (req, reply) => {
+    const a = await prisma.assignment.findUnique({
+      where: { id: req.params.id },
+      include: {
+        server: { select: { name: true } },
+        config: { select: { name: true } },
+      },
+    });
+    if (!a) return reply.status(404).send({ error: 'NotFound' });
+    return reply.send({ ...shape(a), serverName: a.server?.name, configName: a.config?.name });
+  });
+
+  app.post('/', async (req, reply) => {
+    const env = loadEnv();
+    const body = AssignmentCreate.parse(req.body);
+
+    const server = await prisma.server.findUnique({ where: { id: body.serverId } });
+    if (!server || server.deletedAt) {
+      return reply.status(404).send({ error: 'NotFound', message: 'server not found' });
+    }
+    const config = await prisma.config.findUnique({ where: { id: body.configId } });
+    if (!config || config.deletedAt) {
+      return reply.status(404).send({ error: 'NotFound', message: 'config not found' });
+    }
+
+    // The partial unique index lets us re-assign after removal — but we need
+    // generation = max(prior gen) + 1 so the agent ignores stale results.
+    const prior = await prisma.assignment.findFirst({
+      where: { serverId: body.serverId, configId: body.configId },
+      orderBy: { generation: 'desc' },
+      select: { generation: true, lifecycleState: true },
+    });
+    if (prior && (prior.lifecycleState === 'active' || prior.lifecycleState === 'removing')) {
+      return reply
+        .status(409)
+        .send({ error: 'Conflict', message: 'assignment already exists for this server+config' });
+    }
+    const generation = (prior?.generation ?? 0) + 1;
+    const intervalMinutes = body.intervalMinutes ?? env.DEFAULT_ASSIGNMENT_INTERVAL_MINUTES;
+
+    const created = await prisma.assignment.create({
+      data: {
+        serverId: body.serverId,
+        configId: body.configId,
+        generation,
+        intervalMinutes,
+        nextDueAt: new Date(Date.now() + intervalMinutes * 60_000),
+      },
+    });
+
+    await reconcileAssignmentPrereq(created.id);
+
+    req.audit({
+      eventType: 'assignment.created',
+      entityType: 'assignment',
+      entityId: created.id,
+      payload: { serverId: body.serverId, configId: body.configId, generation },
+    });
+    app.broadcast(`server:${body.serverId}`, 'assignment.created', {
+      assignmentId: created.id,
+      configId: body.configId,
+      generation,
+    });
+
+    const fresh = await prisma.assignment.findUnique({ where: { id: created.id } });
+    return reply.status(201).send(shape(fresh!));
+  });
+
+  app.patch<{ Params: { id: string } }>('/:id', async (req, reply) => {
+    const body = AssignmentUpdate.parse(req.body);
+    const a = await prisma.assignment.findUnique({ where: { id: req.params.id } });
+    if (!a) return reply.status(404).send({ error: 'NotFound' });
+    if (a.lifecycleState !== 'active') {
+      return reply
+        .status(409)
+        .send({ error: 'Conflict', message: `cannot edit assignment in state ${a.lifecycleState}` });
+    }
+    const updated = await prisma.assignment.update({
+      where: { id: a.id },
+      data: {
+        intervalMinutes: body.intervalMinutes ?? a.intervalMinutes,
+        enabled: body.enabled ?? a.enabled,
+      },
+    });
+    req.audit({
+      eventType: 'assignment.updated',
+      entityType: 'assignment',
+      entityId: a.id,
+      payload: body as Record<string, unknown>,
+    });
+    app.broadcast(`server:${a.serverId}`, 'assignment.updated', {
+      assignmentId: a.id,
+    });
+    return reply.send(shape(updated));
+  });
+
+  // Soft uninstall — flip to 'removing' so the agent runs uninstall on its next poll.
+  app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
+    const a = await prisma.assignment.findUnique({ where: { id: req.params.id } });
+    if (!a) return reply.status(404).send({ error: 'NotFound' });
+    if (a.lifecycleState !== 'active') {
+      return reply
+        .status(409)
+        .send({ error: 'Conflict', message: `cannot remove assignment in state ${a.lifecycleState}` });
+    }
+    const updated = await prisma.assignment.update({
+      where: { id: a.id },
+      data: { lifecycleState: 'removing', removalRequestedAt: new Date() },
+    });
+    req.audit({
+      eventType: 'assignment.removal.requested',
+      entityType: 'assignment',
+      entityId: a.id,
+      payload: {},
+    });
+    app.broadcast(`server:${a.serverId}`, 'assignment.removing', {
+      assignmentId: a.id,
+    });
+    return reply.send(shape(updated));
+  });
+
+  // Force-remove — bypass agent ack. Used when the agent is permanently gone.
+  app.post<{ Params: { id: string } }>('/:id/force-remove', async (req, reply) => {
+    const a = await prisma.assignment.findUnique({ where: { id: req.params.id } });
+    if (!a) return reply.status(404).send({ error: 'NotFound' });
+    if (a.lifecycleState === 'removed' || a.lifecycleState === 'removal_expired') {
+      return reply.status(409).send({
+        error: 'Conflict',
+        message: `assignment already in terminal state ${a.lifecycleState}`,
+      });
+    }
+    const now = new Date();
+    const updated = await prisma.assignment.update({
+      where: { id: a.id },
+      data: {
+        lifecycleState: 'removal_expired',
+        removalRequestedAt: a.removalRequestedAt ?? now,
+        removedAt: now,
+      },
+    });
+    req.audit({
+      eventType: 'assignment.force_removed',
+      entityType: 'assignment',
+      entityId: a.id,
+      payload: {},
+    });
+    app.broadcast(`server:${a.serverId}`, 'assignment.removed', {
+      assignmentId: a.id,
+      forced: true,
+    });
+    return reply.send(shape(updated));
+  });
 };
 
 export default route;
