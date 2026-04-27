@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { apiGet, softFetch } from '@/lib/api';
 import { RelativeTime } from '@/components/RelativeTime';
 import { BackendIncomplete } from '@/components/BackendIncomplete';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 import type { ConfigSummary } from '@dsc-fleet/shared-types';
 
 export function ConfigsPage() {
@@ -32,11 +33,14 @@ export function ConfigsPage() {
             Immutable revisions of DSC v3 documents. Editing a config creates a new revision.
           </p>
         </div>
-        <Button asChild>
-          <Link to="/configs/new">
-            <Plus className="h-4 w-4" /> New Config
-          </Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <RefreshButton queryKeys={[['configs']]} />
+          <Button asChild>
+            <Link to="/configs/new">
+              <Plus className="h-4 w-4" /> New Config
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {data === null && <BackendIncomplete feature="Config inventory" />}

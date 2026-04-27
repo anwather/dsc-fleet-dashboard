@@ -36,20 +36,37 @@ export function AddServerDialog({ open, onOpenChange }: Props) {
   const createServer = useMutation({
     mutationFn: async (body: ServerCreate) => {
       const server = await apiPost<ServerSummary>('/servers', body);
-      // Best-effort: kick off provision token + provision job. Both endpoints
-      // may still be 501 — surface only a "queued" toast in that case.
+      // Best-effort: queue the provision job. The route is /provision-token;
+      // a /provision alias also exists for older clients.
+      let jobId: string | null = null;
       try {
-        await apiPost(`/servers/${server.id}/provision`, {});
+        const r = await apiPost<{ jobId: string }>(
+          `/servers/${server.id}/provision-token`,
+          {},
+        );
+        jobId = r.jobId;
       } catch (e) {
-        if (!(e instanceof ApiError && e.notImplemented)) throw e;
+        // 501 = backend not implemented (dev mode) — we still created the row.
+        if (!(e instanceof ApiError && e.notImplemented)) {
+          // Don't fail the whole add — surface a separate toast and let the
+          // user re-run provisioning from Server detail → Prereqs.
+          toast({
+            title: 'Provision job not queued',
+            description: e instanceof Error ? e.message : String(e),
+            variant: 'destructive',
+          });
+        }
       }
-      return server;
+      return { server, jobId };
     },
-    onSuccess: (server) => {
+    onSuccess: ({ server, jobId }) => {
       qc.invalidateQueries({ queryKey: ['servers'] });
+      qc.invalidateQueries({ queryKey: ['jobs'] });
       toast({
         title: 'Server added',
-        description: `${server.name} queued for provisioning.`,
+        description: jobId
+          ? `${server.name} queued for provisioning (job ${jobId.slice(0, 8)}).`
+          : `${server.name} added. Provisioning was not queued — re-run it from Server detail.`,
         variant: 'success',
       });
       onOpenChange(false);

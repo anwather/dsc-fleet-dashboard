@@ -169,6 +169,39 @@ const route: FastifyPluginAsync = async (app) => {
     });
   });
 
+  // Alias: clients (incl. older UI builds and the Server-detail "Re-run
+  // provisioning" button) may POST /servers/:id/provision. Same handler.
+  app.post<{ Params: { id: string } }>('/:id/provision', async (req, reply) => {
+    const env = loadEnv();
+    const s = await prisma.server.findUnique({ where: { id: req.params.id } });
+    if (!s || s.deletedAt) return reply.status(404).send({ error: 'NotFound' });
+
+    const token = generateToken(32);
+    const expiresAt = new Date(Date.now() + env.AZURE_RUNCOMMAND_TIMEOUT_MINUTES * 60_000);
+    const dashboardUrl = `${req.protocol}://${req.headers.host ?? 'localhost'}`;
+
+    const jobId = await createProvisionJob(s.id, {
+      token,
+      expiresAt: expiresAt.toISOString(),
+      dashboardUrl,
+      agentBridgeBaseUrl:
+        'https://raw.githubusercontent.com/anwather/dsc-fleet/main/bootstrap',
+    });
+
+    req.audit({
+      eventType: 'server.provision.requested',
+      entityType: 'server',
+      entityId: s.id,
+      payload: { jobId, expiresAt: expiresAt.toISOString(), via: 'alias' },
+    });
+
+    return reply.status(201).send({
+      provisionToken: token,
+      expiresAt: expiresAt.toISOString(),
+      jobId,
+    });
+  });
+
   app.post<{ Params: { id: string } }>('/:id/install-modules', async (req, reply) => {
     const body = InstallModulesBody.parse(req.body);
     const s = await prisma.server.findUnique({ where: { id: req.params.id } });

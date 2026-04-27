@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { JobStatusPill } from '@/components/StatusPill';
 import { RelativeTime } from '@/components/RelativeTime';
 import { BackendIncomplete } from '@/components/BackendIncomplete';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 import { apiGet, softFetch } from '@/lib/api';
 import { useWsTopic } from '@/hooks/useWebSocket';
 import {
@@ -48,18 +49,21 @@ export function JobsPage() {
             Background work — provisioning, module installs, removals. Live-updated over WebSocket.
           </p>
         </div>
-        <Select value={status} onValueChange={(v) => setStatus(v as 'all' | JobStatus)}>
-          <SelectTrigger className="w-40">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {STATUSES.map((s) => (
-              <SelectItem key={s} value={s}>
-                {s}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <RefreshButton queryKeys={[['jobs']]} />
+          <Select value={status} onValueChange={(v) => setStatus(v as 'all' | JobStatus)}>
+            <SelectTrigger className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {STATUSES.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {data === null && <BackendIncomplete feature="Jobs" />}

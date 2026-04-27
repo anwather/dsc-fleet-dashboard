@@ -5,6 +5,12 @@ minikube cluster on your workstation, with all configuration sourced from the
 repo-root `.env` file. Persistent storage survives `minikube stop`,
 `minikube start`, and host reboots; only `minikube delete` destroys data.
 
+> **TL;DR — one command.** After installing the prereqs and creating
+> `.env`, run `..\scripts\deploy-minikube.ps1` from the repo root. It runs
+> sections 4 + 5 of this guide automatically (docker-env, build images,
+> apply manifests, wait for rollouts). Use this guide if you need the
+> per-step detail or want to operate on individual pieces.
+
 ## Contents
 
 1. [Prerequisites](#1-prerequisites)

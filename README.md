@@ -32,10 +32,49 @@ sample, and the assignment matrix.
 
 ### minikube
 
-If you'd rather run on a local Kubernetes, see
-[`k8s/README.md`](k8s/README.md) for the manifest set and minikube loop.
-The cluster bundles a single-replica Postgres `StatefulSet` with a PVC for
-durable storage between `minikube stop` cycles.
+```pwsh
+git clone https://github.com/anwather/dsc-fleet-dashboard.git
+cd dsc-fleet-dashboard
+Copy-Item .env.example .env   # then edit AZURE_* (optional for non-Azure work)
+minikube start --cpus=4 --memory=6g --disk-size=20g
+.\scripts\deploy-minikube.ps1
+minikube service web -n dsc-fleet
+```
+
+`scripts\deploy-minikube.ps1` (and the parallel `scripts/deploy-minikube.sh`)
+is the one-shot deployer: it switches your shell to the minikube docker
+daemon, builds both images, applies all manifests via `k8s\Apply-FromEnv.ps1`,
+restarts the deployments, and waits for rollouts. Re-run it any time after
+code changes — `--rebuild-only`, `--apply-only`, and `--no-wait` flags are
+available for tighter loops.
+
+For the per-manifest walkthrough and ops/troubleshooting, see
+[`k8s/README.md`](k8s/README.md). The cluster bundles a single-replica
+Postgres `StatefulSet` with a PVC for durable storage between
+`minikube stop` cycles.
+
+### Recent UI changes
+
+- Every list view (Servers, Configs, Assignments, Jobs) and the Server
+  detail page have a refresh button that invalidates their queries on
+  click.
+- The Server detail page opens on a new **Prereqs** tab showing the latest
+  provisioning + module-install jobs and a required-vs-installed module
+  table. Two buttons re-trigger provisioning or install only the modules
+  that are missing.
+- The Servers list now has a coloured/underlined name link, an explicit
+  **View →** button, and a **Trash** icon for soft-removing the server
+  (DELETE → soft-delete; assignments and run history are kept). The
+  Server detail page header has the same Remove action.
+- Assignments is no longer a Server×Config matrix. It's now a per-server
+  list with config chips; click a chip to edit interval, jump to the
+  config or server, or remove the assignment. The "Bulk Install" column
+  is gone — that lives on the Prereqs tab now with the actual module list.
+- Add Server now correctly fires the provisioning job (the dialog used to
+  POST the wrong route, so the server row appeared but no job ran). The
+  returned `jobId` is shown in the success toast.
+- The config editor flags an empty Name with helper text and a tooltip on
+  the disabled Create button so it's no longer a silent dead end.
 
 ## Documentation
 
@@ -55,6 +94,7 @@ durable storage between `minikube stop` cycles.
 | [`apps/web`](apps/web) | React 18 + Vite + Tailwind UI. Built into static assets and served by nginx. |
 | [`packages/shared-types`](packages/shared-types) | TypeScript types shared between api and web (assignment, run-result, audit, ws-event). |
 | [`k8s`](k8s) | Kubernetes manifests for minikube / lab clusters. |
+| [`scripts`](scripts) | One-shot deploy scripts (`deploy-minikube.ps1`, `deploy-minikube.sh`). |
 | [`docs`](docs) | This documentation. |
 | [`.env.example`](.env.example) | Documented environment variables for the api container. |
 | [`docker-compose.yml`](docker-compose.yml) | Bundled Postgres + api + web stack. |

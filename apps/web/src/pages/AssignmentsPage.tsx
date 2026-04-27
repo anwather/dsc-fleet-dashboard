@@ -1,11 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { Wrench } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
   DialogContent,
@@ -18,8 +17,10 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ToastProvider';
 import { BackendIncomplete } from '@/components/BackendIncomplete';
-import { LifecyclePill, PrereqPill, LastStatusPill } from '@/components/StatusPill';
-import { apiGet, apiPost, apiDelete, ApiError, softFetch } from '@/lib/api';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { RefreshButton } from '@/components/ui/RefreshButton';
+import { LifecyclePill, LastStatusPill, ServerStatusPill } from '@/components/StatusPill';
+import { apiGet, apiPost, apiPatch, apiDelete, softFetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import type {
   ServerSummary,
@@ -28,14 +29,30 @@ import type {
 } from '@dsc-fleet/shared-types';
 
 const PAGE_SIZE = 25;
+const INTERVAL_OPTIONS = [5, 10, 15, 30, 60, 120, 240, 1440];
 
+type AddPicker = { serverId: string; serverName: string };
+type ChipMenu = { assignment: AssignmentSummary; configName: string; serverName: string };
+
+/**
+ * Per-server list of config chips. Replaces the original Server×Config matrix
+ * (which didn't scale past ~6 configs) and the confusing "Bulk / Install"
+ * column (whose action moved to ServerDetail → Prereqs → Install missing
+ * modules, where the actual missing-module list is computed).
+ */
 export function AssignmentsPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [filter, setFilter] = useState('');
   const [page, setPage] = useState(0);
-  const [picker, setPicker] = useState<{ serverId: string; configId: string } | null>(null);
+
+  const [addPicker, setAddPicker] = useState<AddPicker | null>(null);
+  const [pickConfigId, setPickConfigId] = useState<string>('');
   const [intervalMin, setIntervalMin] = useState(15);
+
+  const [chipMenu, setChipMenu] = useState<ChipMenu | null>(null);
+  const [chipInterval, setChipInterval] = useState(15);
+  const [removeTarget, setRemoveTarget] = useState<ChipMenu | null>(null);
 
   const servers = useQuery<ServerSummary[] | null>({
     queryKey: ['servers'],
@@ -50,12 +67,23 @@ export function AssignmentsPage() {
     queryFn: () => softFetch(() => apiGet<AssignmentSummary[]>('/assignments')),
   });
 
-  // Index for O(1) lookup in the matrix.
-  const byKey = useMemo(() => {
-    const m = new Map<string, AssignmentSummary>();
-    for (const a of assignments.data ?? []) m.set(`${a.serverId}::${a.configId}`, a);
+  // Group assignments by serverId for the per-server list rendering.
+  const byServer = useMemo(() => {
+    const m = new Map<string, AssignmentSummary[]>();
+    for (const a of assignments.data ?? []) {
+      const arr = m.get(a.serverId) ?? [];
+      arr.push(a);
+      m.set(a.serverId, arr);
+    }
     return m;
   }, [assignments.data]);
+
+  // Quick lookup: configId → name.
+  const configName = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of configs.data ?? []) m.set(c.id, c.name);
+    return m;
+  }, [configs.data]);
 
   const filteredServers = (servers.data ?? []).filter((s) =>
     s.name.toLowerCase().includes(filter.toLowerCase()),
@@ -70,22 +98,8 @@ export function AssignmentsPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['assignments'] });
       toast({ title: 'Assignment created', variant: 'success' });
-      setPicker(null);
-    },
-    onError: (e: unknown) => {
-      toast({
-        title: 'Failed',
-        description: e instanceof Error ? e.message : String(e),
-        variant: 'destructive',
-      });
-    },
-  });
-
-  const remove = useMutation({
-    mutationFn: (assignmentId: string) => apiDelete(`/assignments/${assignmentId}`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['assignments'] });
-      toast({ title: 'Removal requested', variant: 'success' });
+      setAddPicker(null);
+      setPickConfigId('');
     },
     onError: (e: unknown) =>
       toast({
@@ -95,42 +109,59 @@ export function AssignmentsPage() {
       }),
   });
 
-  const installAll = useMutation({
-    mutationFn: async (serverId: string) => {
-      try {
-        return await apiPost(`/servers/${serverId}/install-modules`, {});
-      } catch (e) {
-        if (e instanceof ApiError && e.notImplemented) return null;
-        throw e;
-      }
+  const updateInterval = useMutation({
+    mutationFn: ({ id, intervalMinutes }: { id: string; intervalMinutes: number }) =>
+      apiPatch<AssignmentSummary>(`/assignments/${id}`, { intervalMinutes }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['assignments'] });
+      toast({ title: 'Interval updated', variant: 'success' });
+      setChipMenu(null);
     },
-    onSuccess: (r) => {
-      if (r === null) {
-        toast({
-          title: 'Bulk install unavailable',
-          description: 'POST /servers/:id/install-modules not yet implemented.',
-          variant: 'info',
-        });
-        return;
-      }
-      toast({ title: 'Module install job queued', variant: 'success' });
-      qc.invalidateQueries({ queryKey: ['jobs'] });
+    onError: (e: unknown) =>
+      toast({
+        title: 'Failed',
+        description: e instanceof Error ? e.message : String(e),
+        variant: 'destructive',
+      }),
+  });
+
+  const remove = useMutation({
+    mutationFn: (assignmentId: string) => apiDelete(`/assignments/${assignmentId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['assignments'] });
+      toast({ title: 'Removal requested', variant: 'success' });
+      setRemoveTarget(null);
+      setChipMenu(null);
     },
+    onError: (e: unknown) =>
+      toast({
+        title: 'Failed',
+        description: e instanceof Error ? e.message : String(e),
+        variant: 'destructive',
+      }),
   });
 
   const notImpl =
     servers.data === null || configs.data === null || assignments.data === null;
 
+  // Available configs for the Add picker — exclude already-assigned ones.
+  const addAvailable = useMemo(() => {
+    if (!addPicker) return [];
+    const taken = new Set((byServer.get(addPicker.serverId) ?? []).map((a) => a.configId));
+    return (configs.data ?? []).filter((c) => !taken.has(c.id));
+  }, [addPicker, byServer, configs.data]);
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Assignments</h1>
           <p className="text-sm text-muted-foreground">
-            Server × Config matrix. Click a cell to assign or remove.
+            One row per server. Each chip is an assigned config — click a chip to edit interval,
+            remove, or jump to its run history.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <Input
             placeholder="Filter servers…"
             value={filter}
@@ -140,10 +171,11 @@ export function AssignmentsPage() {
             }}
             className="w-56"
           />
+          <RefreshButton queryKeys={[['servers'], ['configs'], ['assignments']]} />
         </div>
       </div>
 
-      {notImpl && <BackendIncomplete feature="Assignments matrix" />}
+      {notImpl && <BackendIncomplete feature="Assignments" />}
 
       {(servers.isLoading || configs.isLoading || assignments.isLoading) && (
         <Skeleton className="h-80 w-full" />
@@ -151,86 +183,88 @@ export function AssignmentsPage() {
 
       {!servers.isLoading && servers.data && configs.data && assignments.data && (
         <>
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/50">
-                <tr>
-                  <th className="sticky left-0 z-10 bg-muted/50 text-left p-2 min-w-[220px]">
-                    Server
-                  </th>
-                  {(configs.data ?? []).map((c) => (
-                    <th key={c.id} className="text-left p-2 whitespace-nowrap">
-                      <Link to={`/configs/${c.id}`} className="font-medium hover:underline">
-                        {c.name}
-                      </Link>
-                      <div className="text-xs text-muted-foreground font-normal">
-                        v{c.currentRevision?.version ?? '—'}
-                      </div>
-                    </th>
-                  ))}
-                  <th className="p-2 w-32">Bulk</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pageRows.length === 0 && (
-                  <tr>
-                    <td colSpan={(configs.data?.length ?? 0) + 2} className="p-6 text-center text-muted-foreground">
-                      No servers match.
-                    </td>
-                  </tr>
-                )}
-                {pageRows.map((s) => (
-                  <tr key={s.id} className="border-t">
-                    <td className="sticky left-0 bg-background p-2 align-top">
-                      <Link to={`/servers/${s.id}`} className="font-medium hover:underline">
-                        {s.name}
-                      </Link>
-                      <div className="text-xs text-muted-foreground">{s.status}</div>
-                    </td>
-                    {(configs.data ?? []).map((c) => {
-                      const a = byKey.get(`${s.id}::${c.id}`);
+          <div className="rounded-lg border divide-y">
+            {pageRows.length === 0 && (
+              <div className="p-6 text-center text-sm text-muted-foreground">
+                No servers match.
+              </div>
+            )}
+            {pageRows.map((s) => {
+              const list = byServer.get(s.id) ?? [];
+              return (
+                <div
+                  key={s.id}
+                  className="flex flex-col gap-3 p-3 sm:flex-row sm:items-start sm:justify-between"
+                >
+                  <div className="min-w-[200px] sm:max-w-[260px]">
+                    <Link
+                      to={`/servers/${s.id}`}
+                      className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                    >
+                      {s.name}
+                    </Link>
+                    <div className="mt-1 flex items-center gap-2">
+                      <ServerStatusPill status={s.status} />
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {list.length === 0
+                        ? 'No configs assigned.'
+                        : `${list.length} config${list.length === 1 ? '' : 's'} assigned.`}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-1 flex-wrap gap-2">
+                    {list.map((a) => {
+                      const name = configName.get(a.configId) ?? a.configId.slice(0, 8);
                       return (
-                        <td
-                          key={c.id}
-                          className={cn(
-                            'p-2 align-top cursor-pointer hover:bg-accent/50 transition-colors',
-                          )}
+                        <button
+                          key={a.id}
+                          type="button"
                           onClick={() => {
-                            if (a) {
-                              if (confirm(`Remove ${c.name} from ${s.name}?`)) remove.mutate(a.id);
-                            } else {
-                              setPicker({ serverId: s.id, configId: c.id });
-                            }
+                            setChipInterval(a.intervalMinutes);
+                            setChipMenu({
+                              assignment: a,
+                              configName: name,
+                              serverName: s.name,
+                            });
                           }}
-                        >
-                          {a ? (
-                            <div className="space-y-1">
-                              <LifecyclePill state={a.lifecycleState} />
-                              <div className="flex flex-wrap gap-1">
-                                <PrereqPill status={a.prereqStatus} />
-                                <LastStatusPill status={a.lastStatus} />
-                              </div>
-                            </div>
-                          ) : (
-                            <Badge variant="outline" className="opacity-40">+</Badge>
+                          className={cn(
+                            'group inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs',
+                            'hover:border-primary hover:bg-accent transition-colors',
                           )}
-                        </td>
+                          title={`${name} · every ${a.intervalMinutes}m — click to manage`}
+                        >
+                          <LifecyclePill state={a.lifecycleState} />
+                          <span className="font-medium">{name}</span>
+                          <span className="text-muted-foreground">·</span>
+                          <span className="text-muted-foreground">every {a.intervalMinutes}m</span>
+                          {a.lastStatus && (
+                            <>
+                              <span className="text-muted-foreground">·</span>
+                              <LastStatusPill status={a.lastStatus} />
+                            </>
+                          )}
+                        </button>
                       );
                     })}
-                    <td className="p-2 align-top">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => installAll.mutate(s.id)}
-                        disabled={installAll.isPending}
-                      >
-                        <Wrench className="h-3 w-3" /> Install
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                  </div>
+
+                  <div className="flex shrink-0 sm:self-center">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setIntervalMin(15);
+                        setPickConfigId('');
+                        setAddPicker({ serverId: s.id, serverName: s.name });
+                      }}
+                    >
+                      <Plus className="h-4 w-4" /> Add
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           {totalPages > 1 && (
@@ -259,16 +293,37 @@ export function AssignmentsPage() {
         </>
       )}
 
-      <Dialog open={!!picker} onOpenChange={(o) => !o && setPicker(null)}>
+      {/* Add assignment dialog — config picker + interval. */}
+      <Dialog open={!!addPicker} onOpenChange={(o) => !o && setAddPicker(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>New assignment</DialogTitle>
+            <DialogTitle>Assign a config to {addPicker?.serverName}</DialogTitle>
             <DialogDescription>
               The agent will install required modules on its next heartbeat (if missing) and start
               applying on the configured cadence.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="cfg-picker">Configuration</Label>
+              <Select value={pickConfigId} onValueChange={setPickConfigId}>
+                <SelectTrigger id="cfg-picker">
+                  <SelectValue placeholder="Select a configuration…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {addAvailable.length === 0 && (
+                    <SelectItem value="__none" disabled>
+                      No more configs available
+                    </SelectItem>
+                  )}
+                  {addAvailable.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name} (v{c.currentRevision?.version ?? '—'})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-1.5">
               <Label htmlFor="interval">Interval (minutes)</Label>
               <Select
@@ -279,9 +334,9 @@ export function AssignmentsPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {[5, 10, 15, 30, 60, 120, 240, 1440].map((n) => (
+                  {INTERVAL_OPTIONS.map((n) => (
                     <SelectItem key={n} value={String(n)}>
-                      {n}
+                      every {n} min
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -289,25 +344,123 @@ export function AssignmentsPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPicker(null)}>
+            <Button variant="outline" onClick={() => setAddPicker(null)}>
               Cancel
             </Button>
             <Button
               onClick={() =>
-                picker &&
+                addPicker &&
+                pickConfigId &&
                 create.mutate({
-                  serverId: picker.serverId,
-                  configId: picker.configId,
+                  serverId: addPicker.serverId,
+                  configId: pickConfigId,
                   intervalMinutes: intervalMin,
                 })
               }
-              disabled={create.isPending}
+              disabled={create.isPending || !pickConfigId}
+              title={!pickConfigId ? 'Pick a configuration first' : undefined}
             >
               {create.isPending ? 'Creating…' : 'Create assignment'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Chip menu — edit interval / remove / jump to config. */}
+      <Dialog open={!!chipMenu} onOpenChange={(o) => !o && setChipMenu(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {chipMenu?.configName} on {chipMenu?.serverName}
+            </DialogTitle>
+            <DialogDescription>
+              Adjust the cadence, remove this assignment, or jump to the related views.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="chip-interval">Interval (minutes)</Label>
+              <Select
+                value={String(chipInterval)}
+                onValueChange={(v) => setChipInterval(Number(v))}
+              >
+                <SelectTrigger id="chip-interval">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {INTERVAL_OPTIONS.map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      every {n} min
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-wrap gap-2 text-sm">
+              {chipMenu && (
+                <>
+                  <Button asChild variant="ghost" size="sm">
+                    <Link to={`/configs/${chipMenu.assignment.configId}`}>View config →</Link>
+                  </Button>
+                  <Button asChild variant="ghost" size="sm">
+                    <Link to={`/servers/${chipMenu.assignment.serverId}`}>View server →</Link>
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+          <DialogFooter className="sm:justify-between">
+            <Button
+              variant="destructive"
+              onClick={() => chipMenu && setRemoveTarget(chipMenu)}
+              disabled={remove.isPending}
+            >
+              <X className="h-4 w-4" /> Remove
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setChipMenu(null)}>
+                Close
+              </Button>
+              <Button
+                onClick={() =>
+                  chipMenu &&
+                  updateInterval.mutate({
+                    id: chipMenu.assignment.id,
+                    intervalMinutes: chipInterval,
+                  })
+                }
+                disabled={
+                  updateInterval.isPending ||
+                  !chipMenu ||
+                  chipInterval === chipMenu.assignment.intervalMinutes
+                }
+              >
+                {updateInterval.isPending ? 'Saving…' : 'Save interval'}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirm-remove dialog (separate so chip menu stays open behind it). */}
+      <ConfirmDialog
+        open={!!removeTarget}
+        onOpenChange={(o) => !o && setRemoveTarget(null)}
+        title="Remove this assignment?"
+        description={
+          removeTarget ? (
+            <span>
+              Remove <span className="font-medium">{removeTarget.configName}</span> from{' '}
+              <span className="font-medium">{removeTarget.serverName}</span>? Run history is kept;
+              the agent will stop applying this config on its next check-in.
+            </span>
+          ) : null
+        }
+        confirmLabel="Remove assignment"
+        destructive
+        busy={remove.isPending}
+        onConfirm={() => removeTarget && remove.mutate(removeTarget.assignment.id)}
+      />
     </div>
   );
 }

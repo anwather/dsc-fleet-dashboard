@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { Plus, ServerOff } from 'lucide-react';
-import { apiGet, ApiError } from '@/lib/api';
+import { ChevronRight, Plus, ServerOff, Trash2 } from 'lucide-react';
+import { apiDelete, apiGet, ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import {
   Table,
@@ -17,13 +17,17 @@ import { ServerStatusPill } from '@/components/StatusPill';
 import { RelativeTime } from '@/components/RelativeTime';
 import { AddServerDialog } from '@/components/AddServerDialog';
 import { BackendIncomplete } from '@/components/BackendIncomplete';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { RefreshButton } from '@/components/ui/RefreshButton';
 import { useWsTopic } from '@/hooks/useWebSocket';
-import { useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/components/ToastProvider';
 import type { ServerSummary } from '@dsc-fleet/shared-types';
 
 export function ServersPage() {
   const [open, setOpen] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<ServerSummary | null>(null);
   const qc = useQueryClient();
+  const { toast } = useToast();
 
   const { data, isLoading, error } = useQuery<ServerSummary[]>({
     queryKey: ['servers'],
@@ -37,6 +41,25 @@ export function ServersPage() {
     }
   });
 
+  const remove = useMutation({
+    mutationFn: (id: string) => apiDelete(`/servers/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['servers'] });
+      toast({
+        title: 'Server removed',
+        description: removeTarget
+          ? `${removeTarget.name} hidden. Run history retained in DB.`
+          : 'Server removed.',
+        variant: 'success',
+      });
+      setRemoveTarget(null);
+    },
+    onError: (e: unknown) => {
+      const msg = e instanceof Error ? e.message : 'Failed to remove server';
+      toast({ title: 'Remove failed', description: msg, variant: 'destructive' });
+    },
+  });
+
   const notImpl = error instanceof ApiError && error.notImplemented;
   const otherErr = error && !notImpl ? (error as Error).message : null;
 
@@ -46,12 +69,15 @@ export function ServersPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Servers</h1>
           <p className="text-sm text-muted-foreground">
-            Azure VMs registered with this dashboard.
+            Azure VMs registered with this dashboard. Click a name to view detail.
           </p>
         </div>
-        <Button onClick={() => setOpen(true)}>
-          <Plus className="h-4 w-4" /> Add Server
-        </Button>
+        <div className="flex items-center gap-2">
+          <RefreshButton queryKeys={[['servers']]} />
+          <Button onClick={() => setOpen(true)}>
+            <Plus className="h-4 w-4" /> Add Server
+          </Button>
+        </div>
       </div>
 
       {notImpl && <BackendIncomplete feature="Server inventory" />}
@@ -69,14 +95,15 @@ export function ServersPage() {
               <TableHead>Azure target</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Last heartbeat</TableHead>
-              <TableHead className="text-right">Created</TableHead>
+              <TableHead>Created</TableHead>
+              <TableHead className="w-[140px] text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading &&
               Array.from({ length: 3 }).map((_, i) => (
                 <TableRow key={i}>
-                  <TableCell colSpan={5}>
+                  <TableCell colSpan={6}>
                     <Skeleton className="h-6 w-full" />
                   </TableCell>
                 </TableRow>
@@ -84,7 +111,7 @@ export function ServersPage() {
 
             {!isLoading && (data?.length ?? 0) === 0 && !notImpl && (
               <TableRow>
-                <TableCell colSpan={5}>
+                <TableCell colSpan={6}>
                   <div className="py-12 flex flex-col items-center text-center text-muted-foreground gap-2">
                     <ServerOff className="h-8 w-8" />
                     <div className="font-medium">No servers yet.</div>
@@ -100,7 +127,10 @@ export function ServersPage() {
             {data?.map((s) => (
               <TableRow key={s.id}>
                 <TableCell>
-                  <Link to={`/servers/${s.id}`} className="font-medium hover:underline">
+                  <Link
+                    to={`/servers/${s.id}`}
+                    className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                  >
                     {s.name}
                   </Link>
                   {s.hostname && (
@@ -122,8 +152,33 @@ export function ServersPage() {
                 <TableCell>
                   <RelativeTime iso={s.lastHeartbeatAt} />
                 </TableCell>
-                <TableCell className="text-right">
+                <TableCell>
                   <RelativeTime iso={s.createdAt} />
+                </TableCell>
+                <TableCell className="text-right">
+                  <div className="flex items-center justify-end gap-1">
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="sm"
+                      title="View server detail"
+                    >
+                      <Link to={`/servers/${s.id}`}>
+                        View <ChevronRight className="h-4 w-4" />
+                      </Link>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="text-muted-foreground hover:text-destructive"
+                      title="Remove server"
+                      aria-label={`Remove ${s.name}`}
+                      onClick={() => setRemoveTarget(s)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
@@ -132,6 +187,24 @@ export function ServersPage() {
       </div>
 
       <AddServerDialog open={open} onOpenChange={setOpen} />
+      <ConfirmDialog
+        open={!!removeTarget}
+        onOpenChange={(o) => !o && setRemoveTarget(null)}
+        title="Remove server?"
+        description={
+          removeTarget ? (
+            <span>
+              <span className="font-medium">{removeTarget.name}</span> will be hidden from all
+              lists. Assignments and run history are kept in the database (soft-delete) so audit
+              data isn't lost.
+            </span>
+          ) : null
+        }
+        confirmLabel="Remove server"
+        destructive
+        busy={remove.isPending}
+        onConfirm={() => removeTarget && remove.mutate(removeTarget.id)}
+      />
     </div>
   );
 }

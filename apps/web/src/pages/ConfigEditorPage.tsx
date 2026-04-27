@@ -199,10 +199,20 @@ export function ConfigEditorPage() {
               size="sm"
               onClick={() => save.mutate()}
               disabled={save.isPending || name.trim().length === 0}
+              title={
+                name.trim().length === 0
+                  ? 'Enter a name in the right-hand panel before saving.'
+                  : undefined
+              }
             >
               <Save className="h-4 w-4" />
               {save.isPending ? 'Saving…' : isNew ? 'Create' : 'Save new revision'}
             </Button>
+            {name.trim().length === 0 && (
+              <span className="text-xs text-amber-600 dark:text-amber-400">
+                Name required to save →
+              </span>
+            )}
           </div>
           <div className="flex-1 min-h-0">
             <MonacoYamlEditor value={yaml} onChange={setYaml} />
@@ -212,13 +222,21 @@ export function ConfigEditorPage() {
         {/* Right: metadata + parse result */}
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="cfg-name">Name</Label>
+            <Label htmlFor="cfg-name">
+              Name <span className="text-destructive">*</span>
+            </Label>
             <Input
               id="cfg-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="baseline-registry"
+              aria-invalid={name.trim().length === 0}
             />
+            {name.trim().length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                Required. The Create button is disabled until you fill this in.
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="cfg-desc">Description</Label>
