@@ -19,6 +19,8 @@ import { loadEnv } from './lib/env.js';
 import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
 import { initAzureCredential } from './services/azureCompute.js';
+import { startScheduler } from './services/scheduler.js';
+import { bindJobsApp } from './services/jobs.js';
 
 import errorHandlerPlugin from './plugins/errorHandler.js';
 import auditPlugin from './plugins/audit.js';
@@ -65,6 +67,8 @@ async function main() {
   const { app, env } = await buildApp();
 
   await initAzureCredential();
+  bindJobsApp(app);
+  startScheduler(app);
 
   const close = async (signal: string) => {
     logger.info({ signal }, 'shutting down');
