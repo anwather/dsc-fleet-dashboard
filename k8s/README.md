@@ -132,8 +132,8 @@ loads images directly into the cluster, with no registry round-trip:
 # api image (Dockerfile expects the repo root as build context)
 docker build -t dsc-fleet-dashboard-api:dev -f apps/api/Dockerfile .
 
-# web image
-docker build -t dsc-fleet-dashboard-web:dev -f apps/web/Dockerfile apps/web
+# web image (Dockerfile also expects the repo root as build context)
+docker build -t dsc-fleet-dashboard-web:dev -f apps/web/Dockerfile .
 
 # Verify they made it into the cluster's docker daemon.
 docker images | Select-String 'dsc-fleet-dashboard'
