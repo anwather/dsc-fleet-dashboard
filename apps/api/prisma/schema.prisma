@@ -85,6 +85,17 @@ model Server {
   updatedAt           DateTime @updatedAt       @map("updated_at") @db.Timestamptz(6)
   deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(6)
 
+  // Persisted run-as config. NULL kind => DscV3-Apply scheduled task runs as
+  // SYSTEM. When set, every subsequent /provision (including the silent alias
+  // POST /provision with no body) reuses these credentials so a re-provision
+  // never silently downgrades to SYSTEM.
+  runAsKind           String?   @map("run_as_kind")
+  runAsUser           String?   @map("run_as_user")
+  runAsIv             Bytes     @default("") @map("run_as_iv")
+  runAsCiphertext     Bytes     @default("") @map("run_as_ciphertext")
+  runAsAuthTag        Bytes     @default("") @map("run_as_auth_tag")
+  runAsUpdatedAt      DateTime? @map("run_as_updated_at") @db.Timestamptz(6)
+
   agentKeys     AgentKey[]
   agentCredentials AgentCredential[]
   modules       ServerModule[]

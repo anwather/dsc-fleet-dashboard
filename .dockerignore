@@ -1,0 +1,29 @@
+# Keep build context small for `az acr build` and `docker build`.
+.git
+.github
+node_modules
+**/node_modules
+**/dist
+**/build
+**/.vite
+**/.next
+**/.turbo
+**/coverage
+**/.cache
+**/*.log
+**/.DS_Store
+
+# Local dev / orchestration not needed in container builds
+.azure
+azure
+k8s
+docs
+*.md
+!apps/**/README.md
+.env
+.env.*
+!.env.example
+
+# Editor
+.vscode
+.idea

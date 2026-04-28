@@ -106,6 +106,13 @@ export const ServerSummary = z.object({
   labels: z.record(z.string(), z.unknown()),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
+  runAs: z
+    .object({
+      kind: z.enum(['system', 'password', 'gmsa']),
+      user: z.string().nullable(),
+      updatedAt: z.string().datetime().nullable(),
+    })
+    .optional(),
 });
 export type ServerSummary = z.infer<typeof ServerSummary>;
 

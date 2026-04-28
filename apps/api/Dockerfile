@@ -39,7 +39,8 @@ COPY --from=build /workspace/node_modules ./node_modules
 COPY --from=build /workspace/apps/api/dist ./apps/api/dist
 COPY --from=build /workspace/apps/api/package.json ./apps/api/package.json
 COPY --from=build /workspace/apps/api/prisma ./apps/api/prisma
-COPY --from=build /workspace/apps/api/node_modules ./apps/api/node_modules
+# Note: with npm workspaces all deps (incl. @prisma/client + prisma CLI) hoist
+# to /app/node_modules — there is no /app/apps/api/node_modules to copy.
 COPY --from=build /workspace/packages/shared-types/dist ./packages/shared-types/dist
 COPY --from=build /workspace/packages/shared-types/package.json ./packages/shared-types/package.json
 

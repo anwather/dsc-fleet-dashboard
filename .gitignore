@@ -29,3 +29,7 @@ coverage/
 .tmp/
 # YAML schema cache
 schemas-cache/
+
+# Local-only deployment secrets — never commit
+.azure/secrets.local.json
+

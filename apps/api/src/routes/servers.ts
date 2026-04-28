@@ -49,10 +49,29 @@ const RunAsBody = z.discriminatedUnion('kind', [
 
 const ProvisionBody = z
   .object({
-    runAs: RunAsBody.optional(),
+    // `runAs` may be a fresh credential block (overrides + persists to the
+    // server), `null` to explicitly clear stored credentials and revert to
+    // SYSTEM, or omitted to reuse whatever is already persisted on the
+    // server (which prevents a silent SYSTEM downgrade).
+    runAs: RunAsBody.nullable().optional(),
   })
   .partial()
   .optional();
+
+// Standalone PUT /servers/:id/run-as body — same shape but the kind
+// literal `system` is also accepted as an explicit clear.
+const RunAsConfigBody = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('password'),
+    user: z.string().min(1),
+    password: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal('gmsa'),
+    user: z.string().min(1),
+  }),
+  z.object({ kind: z.literal('system') }),
+]);
 
 
 function shapeServer(s: {
@@ -71,6 +90,9 @@ function shapeServer(s: {
   labels: unknown;
   createdAt: Date;
   updatedAt: Date;
+  runAsKind?: string | null;
+  runAsUser?: string | null;
+  runAsUpdatedAt?: Date | null;
 }) {
   return {
     id: s.id,
@@ -88,6 +110,11 @@ function shapeServer(s: {
     labels: s.labels,
     createdAt: s.createdAt.toISOString(),
     updatedAt: s.updatedAt.toISOString(),
+    runAs: {
+      kind: s.runAsKind ?? 'system',
+      user: s.runAsUser ?? null,
+      updatedAt: s.runAsUpdatedAt?.toISOString() ?? null,
+    },
   };
 }
 
@@ -222,14 +249,57 @@ const route: FastifyPluginAsync = async (app) => {
     const s = await prisma.server.findUnique({ where: { id: req.params.id } });
     if (!s || s.deletedAt) return reply.status(404).send({ error: 'NotFound' });
 
-    // Body is optional; only parse when present.
-    let runAs: z.infer<typeof RunAsBody> | undefined;
+    // Body is optional; only parse when present. `runAs` semantics:
+    //   - undefined  => reuse persisted run-as on the server (or SYSTEM if none)
+    //   - null       => clear persisted run-as and provision as SYSTEM
+    //   - object     => use these creds AND persist to the server
+    let runAs: z.infer<typeof RunAsBody> | null | undefined;
+    let runAsExplicit = false;
     if (req.body && typeof req.body === 'object' && 'runAs' in req.body) {
       const parsed = ProvisionBody.parse(req.body);
-      runAs = parsed?.runAs;
+      runAs = parsed?.runAs ?? null; // body said `runAs: null` or `runAs: undefined`
+      runAsExplicit = true;
     }
 
-    if (runAs?.kind === 'password' && !isCryptoAvailable()) {
+    // Resolve effective run-as for THIS provision.
+    // Source values:
+    //   sourceRunAs : the runAs object we'll feed into the credential URL
+    //   persistRunAs: undefined = no change, null = clear, object = upsert
+    let sourceRunAs: z.infer<typeof RunAsBody> | undefined;
+    let persistRunAs: z.infer<typeof RunAsBody> | null | undefined;
+
+    if (runAsExplicit) {
+      if (runAs === null) {
+        sourceRunAs = undefined;
+        persistRunAs = null;
+      } else if (runAs) {
+        sourceRunAs = runAs;
+        persistRunAs = runAs;
+      }
+    } else if (s.runAsKind) {
+      // Reuse persisted credentials. For password we need decrypt; we
+      // re-seal with a fresh IV when issuing the new AgentCredential row
+      // to avoid IV reuse across credential URLs.
+      if (!isCryptoAvailable() && s.runAsKind === 'password') {
+        return reply.status(503).send({
+          error: 'ServiceUnavailable',
+          message:
+            'RUNAS_MASTER_KEY is not configured on the API; cannot reuse stored password run-as.',
+        });
+      }
+      if (s.runAsKind === 'password') {
+        const plain = (await import('../lib/runasCrypto.js')).decrypt({
+          iv: Buffer.from(s.runAsIv),
+          ciphertext: Buffer.from(s.runAsCiphertext),
+          authTag: Buffer.from(s.runAsAuthTag),
+        });
+        sourceRunAs = { kind: 'password', user: s.runAsUser ?? '', password: plain };
+      } else if (s.runAsKind === 'gmsa') {
+        sourceRunAs = { kind: 'gmsa', user: s.runAsUser ?? '' };
+      }
+    }
+
+    if (sourceRunAs?.kind === 'password' && !isCryptoAvailable()) {
       return reply.status(503).send({
         error: 'ServiceUnavailable',
         message:
@@ -243,13 +313,13 @@ const route: FastifyPluginAsync = async (app) => {
       env.PUBLIC_BASE_URL ?? `${req.protocol}://${req.headers.host ?? 'localhost'}`;
 
     let credentialUrl: string | undefined;
-    if (runAs) {
+    if (sourceRunAs) {
       const urlToken = generateUrlToken();
       let iv: Buffer = Buffer.alloc(0);
       let ciphertext: Buffer = Buffer.alloc(0);
       let authTag: Buffer = Buffer.alloc(0);
-      if (runAs.kind === 'password') {
-        const sealed = encrypt(runAs.password);
+      if (sourceRunAs.kind === 'password') {
+        const sealed = encrypt(sourceRunAs.password);
         iv = sealed.iv;
         ciphertext = sealed.ciphertext;
         authTag = sealed.authTag;
@@ -259,8 +329,8 @@ const route: FastifyPluginAsync = async (app) => {
           serverId: s.id,
           provisionToken: token,
           urlToken,
-          username: runAs.user,
-          kind: runAs.kind,
+          username: sourceRunAs.user,
+          kind: sourceRunAs.kind,
           iv,
           ciphertext,
           authTag,
@@ -268,6 +338,44 @@ const route: FastifyPluginAsync = async (app) => {
         },
       });
       credentialUrl = `${dashboardUrl}/api/agents/runas/${urlToken}`;
+    }
+
+    // Persist run-as on the server when caller explicitly supplied it (or
+    // null to clear). Reusing a previously-persisted value does not touch
+    // the row.
+    if (persistRunAs === null) {
+      await prisma.server.update({
+        where: { id: s.id },
+        data: {
+          runAsKind: null,
+          runAsUser: null,
+          runAsIv: Buffer.alloc(0),
+          runAsCiphertext: Buffer.alloc(0),
+          runAsAuthTag: Buffer.alloc(0),
+          runAsUpdatedAt: new Date(),
+        },
+      });
+    } else if (persistRunAs) {
+      let iv = Buffer.alloc(0);
+      let ciphertext = Buffer.alloc(0);
+      let authTag = Buffer.alloc(0);
+      if (persistRunAs.kind === 'password') {
+        const sealed = encrypt(persistRunAs.password);
+        iv = sealed.iv;
+        ciphertext = sealed.ciphertext;
+        authTag = sealed.authTag;
+      }
+      await prisma.server.update({
+        where: { id: s.id },
+        data: {
+          runAsKind: persistRunAs.kind,
+          runAsUser: persistRunAs.user,
+          runAsIv: iv,
+          runAsCiphertext: ciphertext,
+          runAsAuthTag: authTag,
+          runAsUpdatedAt: new Date(),
+        },
+      });
     }
 
     const jobId = await createProvisionJob(s.id, {
@@ -287,16 +395,22 @@ const route: FastifyPluginAsync = async (app) => {
         jobId,
         expiresAt: expiresAt.toISOString(),
         ...(via === 'alias' ? { via: 'alias' } : {}),
-        ...(runAs ? { runAsKind: runAs.kind, runAsUser: runAs.user } : {}),
+        ...(sourceRunAs
+          ? {
+              runAsKind: sourceRunAs.kind,
+              runAsUser: sourceRunAs.user,
+              runAsSource: persistRunAs ? 'body' : 'persisted',
+            }
+          : {}),
       },
     });
 
-    if (runAs) {
+    if (sourceRunAs) {
       req.audit({
         eventType: 'runas.credential.issued',
         entityType: 'server',
         entityId: s.id,
-        payload: { kind: runAs.kind, user: runAs.user, expiresAt: expiresAt.toISOString() },
+        payload: { kind: sourceRunAs.kind, user: sourceRunAs.user, expiresAt: expiresAt.toISOString() },
       });
     }
 
@@ -306,6 +420,88 @@ const route: FastifyPluginAsync = async (app) => {
       jobId,
     });
   }
+
+  // -------------------------------------------------------------------------
+  // GET / PUT / DELETE /:id/run-as — manage persisted run-as without
+  // triggering a provision. The PUT body is the same shape as
+  // ProvisionBody.runAs, plus an explicit `kind: 'system'` option.
+  // -------------------------------------------------------------------------
+  app.get<{ Params: { id: string } }>('/:id/run-as', async (req, reply) => {
+    const s = await prisma.server.findUnique({ where: { id: req.params.id } });
+    if (!s || s.deletedAt) return reply.status(404).send({ error: 'NotFound' });
+    return reply.send({
+      kind: s.runAsKind ?? 'system',
+      user: s.runAsUser,
+      updatedAt: s.runAsUpdatedAt?.toISOString() ?? null,
+    });
+  });
+
+  app.put<{ Params: { id: string } }>('/:id/run-as', async (req, reply) => {
+    const s = await prisma.server.findUnique({ where: { id: req.params.id } });
+    if (!s || s.deletedAt) return reply.status(404).send({ error: 'NotFound' });
+    const body = RunAsConfigBody.parse(req.body);
+    if (body.kind === 'password' && !isCryptoAvailable()) {
+      return reply.status(503).send({
+        error: 'ServiceUnavailable',
+        message:
+          'RUNAS_MASTER_KEY is not configured on the API; password run-as cannot be set.',
+      });
+    }
+    let iv = Buffer.alloc(0);
+    let ciphertext = Buffer.alloc(0);
+    let authTag = Buffer.alloc(0);
+    if (body.kind === 'password') {
+      const sealed = encrypt(body.password);
+      iv = sealed.iv;
+      ciphertext = sealed.ciphertext;
+      authTag = sealed.authTag;
+    }
+    const updated = await prisma.server.update({
+      where: { id: s.id },
+      data: {
+        runAsKind: body.kind === 'system' ? null : body.kind,
+        runAsUser: body.kind === 'system' ? null : body.user,
+        runAsIv: iv,
+        runAsCiphertext: ciphertext,
+        runAsAuthTag: authTag,
+        runAsUpdatedAt: new Date(),
+      },
+    });
+    req.audit({
+      eventType: 'server.runas.set',
+      entityType: 'server',
+      entityId: s.id,
+      payload: { kind: body.kind, user: body.kind === 'system' ? null : body.user },
+    });
+    return reply.send({
+      kind: updated.runAsKind ?? 'system',
+      user: updated.runAsUser,
+      updatedAt: updated.runAsUpdatedAt?.toISOString() ?? null,
+    });
+  });
+
+  app.delete<{ Params: { id: string } }>('/:id/run-as', async (req, reply) => {
+    const s = await prisma.server.findUnique({ where: { id: req.params.id } });
+    if (!s || s.deletedAt) return reply.status(404).send({ error: 'NotFound' });
+    await prisma.server.update({
+      where: { id: s.id },
+      data: {
+        runAsKind: null,
+        runAsUser: null,
+        runAsIv: Buffer.alloc(0),
+        runAsCiphertext: Buffer.alloc(0),
+        runAsAuthTag: Buffer.alloc(0),
+        runAsUpdatedAt: new Date(),
+      },
+    });
+    req.audit({
+      eventType: 'server.runas.cleared',
+      entityType: 'server',
+      entityId: s.id,
+      payload: {},
+    });
+    return reply.status(204).send();
+  });
 
   app.post<{ Params: { id: string } }>('/:id/install-modules', async (req, reply) => {
     const body = InstallModulesBody.parse(req.body);
