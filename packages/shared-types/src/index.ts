@@ -201,6 +201,11 @@ export const AssignmentSummary = z.object({
   // greater than `revisionVersion`, the UI surfaces an "update available"
   // affordance so the user can opt-in.
   latestRevisionVersion: z.number().int().positive().nullable().optional(),
+  // Revision version of the most recent run result. When < revisionVersion
+  // (i.e. an upgrade has been pinned but no run has occurred against the new
+  // revision yet), the UI surfaces a "pending vN" badge so the user can see
+  // the upgrade is in flight.
+  lastRunRevisionVersion: z.number().int().positive().nullable().optional(),
 });
 export type AssignmentSummary = z.infer<typeof AssignmentSummary>;
 

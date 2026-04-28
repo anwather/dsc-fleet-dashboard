@@ -307,6 +307,19 @@ export function AssignmentsPage() {
                             <>
                               <span className="text-muted-foreground">·</span>
                               <LastStatusPill status={a.lastStatus} />
+                              {a.lastRunRevisionVersion != null && (
+                                <span className="text-muted-foreground">v{a.lastRunRevisionVersion}</span>
+                              )}
+                              {a.revisionVersion != null &&
+                                a.lastRunRevisionVersion != null &&
+                                a.revisionVersion > a.lastRunRevisionVersion && (
+                                  <span
+                                    className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
+                                    title={`Upgrade pinned to v${a.revisionVersion}; awaiting next run`}
+                                  >
+                                    pending v{a.revisionVersion}
+                                  </span>
+                                )}
                             </>
                           )}
                         </button>

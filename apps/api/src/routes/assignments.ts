@@ -87,6 +87,22 @@ const route: FastifyPluginAsync = async (app) => {
           pinnedRevision: { select: { version: true } },
         },
       });
+      // Resolve the most recent run result per assignment in a single query so
+      // the UI can detect "pending upgrade" (pinned revision > last-run revision).
+      const lastRunByAssignment = new Map<string, number>();
+      if (rows.length > 0) {
+        const latest = await prisma.runResult.findMany({
+          where: { assignmentId: { in: rows.map((r) => r.id) } },
+          orderBy: [{ assignmentId: 'asc' }, { finishedAt: 'desc' }],
+          distinct: ['assignmentId'],
+          select: { assignmentId: true, configRevision: { select: { version: true } } },
+        });
+        for (const r of latest) {
+          if (r.configRevision?.version != null) {
+            lastRunByAssignment.set(r.assignmentId, r.configRevision.version);
+          }
+        }
+      }
       return reply.send(
         rows.map((a) => ({
           ...shape(a),
@@ -95,6 +111,7 @@ const route: FastifyPluginAsync = async (app) => {
           revisionVersion:
             a.pinnedRevision?.version ?? a.config?.currentRevision?.version ?? null,
           latestRevisionVersion: a.config?.currentRevision?.version ?? null,
+          lastRunRevisionVersion: lastRunByAssignment.get(a.id) ?? null,
         })),
       );
     },
@@ -110,12 +127,18 @@ const route: FastifyPluginAsync = async (app) => {
       },
     });
     if (!a) return reply.status(404).send({ error: 'NotFound' });
+    const lastRun = await prisma.runResult.findFirst({
+      where: { assignmentId: a.id },
+      orderBy: { finishedAt: 'desc' },
+      select: { configRevision: { select: { version: true } } },
+    });
     return reply.send({
       ...shape(a),
       serverName: a.server?.name,
       configName: a.config?.name,
       revisionVersion: a.pinnedRevision?.version ?? a.config?.currentRevision?.version ?? null,
       latestRevisionVersion: a.config?.currentRevision?.version ?? null,
+      lastRunRevisionVersion: lastRun?.configRevision?.version ?? null,
     });
   });
 
