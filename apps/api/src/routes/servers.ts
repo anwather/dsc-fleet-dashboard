@@ -8,6 +8,7 @@ import { generateToken } from '../lib/tokens.js';
 import { loadEnv } from '../lib/env.js';
 import { createProvisionJob, createModuleInstallJob } from '../services/jobs.js';
 import { reconcileAssignmentPrereq } from '../services/scheduler.js';
+import { encrypt, generateUrlToken, isCryptoAvailable } from '../lib/runasCrypto.js';
 
 const ServerCreate = z.object({
   azureSubscriptionId: z.string().min(1),
@@ -27,6 +28,32 @@ const InstallModulesBody = z.object({
     .array(z.object({ name: z.string().min(1), minVersion: z.string().optional() }))
     .min(1),
 });
+
+/**
+ * Optional run-as block on the provision-token request. When omitted, the
+ * agent registers as SYSTEM. `password` requires a non-empty password
+ * (encrypted at rest); `gmsa` carries no secret and just routes the gMSA
+ * name through the same one-time URL flow for consistency.
+ */
+const RunAsBody = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('password'),
+    user: z.string().min(1),
+    password: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal('gmsa'),
+    user: z.string().min(1),
+  }),
+]);
+
+const ProvisionBody = z
+  .object({
+    runAs: RunAsBody.optional(),
+  })
+  .partial()
+  .optional();
+
 
 function shapeServer(s: {
   id: string;
@@ -161,50 +188,75 @@ const route: FastifyPluginAsync = async (app) => {
     return reply.status(204).send();
   });
 
-  // Issue a provision token + queue the provision job.
+  // Issue a provision token + queue the provision job. Optionally accepts a
+  // `runAs` block to materialise a one-time credential URL the bootstrap
+  // script will fetch.
   app.post<{ Params: { id: string } }>('/:id/provision-token', async (req, reply) => {
-    const env = loadEnv();
-    const s = await prisma.server.findUnique({ where: { id: req.params.id } });
-    if (!s || s.deletedAt) return reply.status(404).send({ error: 'NotFound' });
-
-    const token = generateToken(32);
-    const expiresAt = new Date(Date.now() + env.AZURE_RUNCOMMAND_TIMEOUT_MINUTES * 60_000);
-    const dashboardUrl =
-      env.PUBLIC_BASE_URL ?? `${req.protocol}://${req.headers.host ?? 'localhost'}`;
-
-    const jobId = await createProvisionJob(s.id, {
-      token,
-      expiresAt: expiresAt.toISOString(),
-      dashboardUrl,
-      agentBridgeBaseUrl:
-        'https://raw.githubusercontent.com/anwather/dsc-fleet/main/bootstrap',
-    });
-
-    req.audit({
-      eventType: 'server.provision.requested',
-      entityType: 'server',
-      entityId: s.id,
-      payload: { jobId, expiresAt: expiresAt.toISOString() },
-    });
-
-    return reply.status(201).send({
-      provisionToken: token,
-      expiresAt: expiresAt.toISOString(),
-      jobId,
-    });
+    return issueProvision(req, reply, 'primary');
   });
 
   // Alias: clients (incl. older UI builds and the Server-detail "Re-run
   // provisioning" button) may POST /servers/:id/provision. Same handler.
   app.post<{ Params: { id: string } }>('/:id/provision', async (req, reply) => {
+    return issueProvision(req, reply, 'alias');
+  });
+
+  async function issueProvision(
+    req: import('fastify').FastifyRequest<{ Params: { id: string } }>,
+    reply: import('fastify').FastifyReply,
+    via: 'primary' | 'alias',
+  ) {
     const env = loadEnv();
     const s = await prisma.server.findUnique({ where: { id: req.params.id } });
     if (!s || s.deletedAt) return reply.status(404).send({ error: 'NotFound' });
+
+    // Body is optional; only parse when present.
+    let runAs: z.infer<typeof RunAsBody> | undefined;
+    if (req.body && typeof req.body === 'object' && 'runAs' in req.body) {
+      const parsed = ProvisionBody.parse(req.body);
+      runAs = parsed?.runAs;
+    }
+
+    if (runAs?.kind === 'password' && !isCryptoAvailable()) {
+      return reply.status(503).send({
+        error: 'ServiceUnavailable',
+        message:
+          'RUNAS_MASTER_KEY is not configured on the API; password run-as cannot be issued.',
+      });
+    }
 
     const token = generateToken(32);
     const expiresAt = new Date(Date.now() + env.AZURE_RUNCOMMAND_TIMEOUT_MINUTES * 60_000);
     const dashboardUrl =
       env.PUBLIC_BASE_URL ?? `${req.protocol}://${req.headers.host ?? 'localhost'}`;
+
+    let credentialUrl: string | undefined;
+    if (runAs) {
+      const urlToken = generateUrlToken();
+      let iv: Buffer = Buffer.alloc(0);
+      let ciphertext: Buffer = Buffer.alloc(0);
+      let authTag: Buffer = Buffer.alloc(0);
+      if (runAs.kind === 'password') {
+        const sealed = encrypt(runAs.password);
+        iv = sealed.iv;
+        ciphertext = sealed.ciphertext;
+        authTag = sealed.authTag;
+      }
+      await prisma.agentCredential.create({
+        data: {
+          serverId: s.id,
+          provisionToken: token,
+          urlToken,
+          username: runAs.user,
+          kind: runAs.kind,
+          iv,
+          ciphertext,
+          authTag,
+          expiresAt,
+        },
+      });
+      credentialUrl = `${dashboardUrl}/api/agents/runas/${urlToken}`;
+    }
 
     const jobId = await createProvisionJob(s.id, {
       token,
@@ -212,21 +264,36 @@ const route: FastifyPluginAsync = async (app) => {
       dashboardUrl,
       agentBridgeBaseUrl:
         'https://raw.githubusercontent.com/anwather/dsc-fleet/main/bootstrap',
+      credentialUrl,
     });
 
     req.audit({
       eventType: 'server.provision.requested',
       entityType: 'server',
       entityId: s.id,
-      payload: { jobId, expiresAt: expiresAt.toISOString(), via: 'alias' },
+      payload: {
+        jobId,
+        expiresAt: expiresAt.toISOString(),
+        ...(via === 'alias' ? { via: 'alias' } : {}),
+        ...(runAs ? { runAsKind: runAs.kind, runAsUser: runAs.user } : {}),
+      },
     });
+
+    if (runAs) {
+      req.audit({
+        eventType: 'runas.credential.issued',
+        entityType: 'server',
+        entityId: s.id,
+        payload: { kind: runAs.kind, user: runAs.user, expiresAt: expiresAt.toISOString() },
+      });
+    }
 
     return reply.status(201).send({
       provisionToken: token,
       expiresAt: expiresAt.toISOString(),
       jobId,
     });
-  });
+  }
 
   app.post<{ Params: { id: string } }>('/:id/install-modules', async (req, reply) => {
     const body = InstallModulesBody.parse(req.body);

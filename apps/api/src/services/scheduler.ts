@@ -141,10 +141,41 @@ async function tick(): Promise<void> {
     await backfillNextDueAt();
     await reconcilePrereqStatus();
     await reapStuckJobs();
+    await sweepRunAsCredentials();
   } catch (err) {
     logger.error({ err }, 'scheduler tick failed');
   }
 }
+
+/**
+ * Sweep run-as credential rows:
+ *   - Delete rows whose expires_at is in the past AND were never consumed.
+ *     These are dead drops the agent never picked up.
+ *   - Scrub ciphertext on consumed rows older than 5 minutes (defence in
+ *     depth — runas endpoint already scrubs synchronously, but if a crash
+ *     interleaved the scrub this catches the leftover).
+ */
+async function sweepRunAsCredentials(): Promise<void> {
+  const now = new Date();
+  const expired = await prisma.agentCredential.deleteMany({
+    where: { consumedAt: null, expiresAt: { lt: now } },
+  });
+  if (expired.count > 0) {
+    logger.info({ count: expired.count }, 'sweep: deleted expired run-as credentials');
+  }
+  const fiveMinAgo = new Date(now.getTime() - 5 * 60_000);
+  const empty = Buffer.alloc(0);
+  await prisma.agentCredential.updateMany({
+    where: {
+      consumedAt: { not: null, lt: fiveMinAgo },
+      // Only update rows that still have non-empty ciphertext to avoid
+      // unnecessary writes on every tick.
+      NOT: { ciphertext: { equals: empty } },
+    },
+    data: { iv: empty, ciphertext: empty, authTag: empty },
+  });
+}
+
 
 export function startScheduler(app: FastifyInstance<any, any, any, any, any>): void {
   appRef = app as unknown as FastifyInstance;

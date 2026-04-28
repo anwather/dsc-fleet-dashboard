@@ -53,6 +53,13 @@ interface JobPayloadProvision {
   expiresAt: string;
   dashboardUrl: string;
   agentBridgeBaseUrl: string;
+  /**
+   * Optional one-time URL the bootstrap script fetches to obtain run-as
+   * credentials. When undefined, the agent registers as SYSTEM (default).
+   * The URL itself is opaque; the bootstrap script supplies the provision
+   * token as Bearer auth when calling it.
+   */
+  credentialUrl?: string;
 }
 
 interface ModuleSpec {
@@ -140,6 +147,10 @@ function buildProvisionScript(payload: JobPayloadProvision): string {
   // dsc-fleet — production users should fork and override via env.
   const dashboardUrl = payload.dashboardUrl.replace(/'/g, "''");
   const token = payload.token.replace(/'/g, "''");
+  const credentialUrl = payload.credentialUrl
+    ? payload.credentialUrl.replace(/'/g, "''")
+    : '';
+  const credArg = credentialUrl ? ` -CredentialUrl '${credentialUrl}'` : '';
   return [
     "$ErrorActionPreference = 'Stop'",
     'Set-StrictMode -Version 3.0',
@@ -157,7 +168,7 @@ function buildProvisionScript(payload: JobPayloadProvision): string {
     '& (Join-Path $bootstrapDir "Install-DscV3.ps1")',
     'if ($LASTEXITCODE -ne 0) { throw "Install-DscV3 failed (exit $LASTEXITCODE)" }',
     'Write-Host "==> running Register-DashboardAgent"',
-    `& (Join-Path $bootstrapDir 'Register-DashboardAgent.ps1') -DashboardUrl '${dashboardUrl}' -ProvisionToken '${token}'`,
+    `& (Join-Path $bootstrapDir 'Register-DashboardAgent.ps1') -DashboardUrl '${dashboardUrl}' -ProvisionToken '${token}'${credArg}`,
     'if ($LASTEXITCODE -ne 0) { throw "Register-DashboardAgent failed (exit $LASTEXITCODE)" }',
     'Write-Host "==> provision complete"',
   ].join('\n');

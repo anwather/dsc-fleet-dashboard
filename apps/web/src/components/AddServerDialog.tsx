@@ -29,20 +29,29 @@ export function AddServerDialog({ open, onOpenChange }: Props) {
     name: '',
     labelsJson: '{}',
   });
+  const [runAsKind, setRunAsKind] = useState<'system' | 'password' | 'gmsa'>('system');
+  const [runAsUser, setRunAsUser] = useState('');
+  const [runAsPassword, setRunAsPassword] = useState('');
   const [labelsErr, setLabelsErr] = useState<string | null>(null);
+  const [runAsErr, setRunAsErr] = useState<string | null>(null);
   const { toast } = useToast();
   const qc = useQueryClient();
 
   const createServer = useMutation({
-    mutationFn: async (body: ServerCreate) => {
-      const server = await apiPost<ServerSummary>('/servers', body);
+    mutationFn: async (input: {
+      body: ServerCreate;
+      runAs?: { kind: 'password' | 'gmsa'; user: string; password?: string };
+    }) => {
+      const server = await apiPost<ServerSummary>('/servers', input.body);
       // Best-effort: queue the provision job. The route is /provision-token;
       // a /provision alias also exists for older clients.
       let jobId: string | null = null;
       try {
+        const provisionBody: Record<string, unknown> = {};
+        if (input.runAs) provisionBody.runAs = input.runAs;
         const r = await apiPost<{ jobId: string }>(
           `/servers/${server.id}/provision-token`,
-          {},
+          provisionBody,
         );
         jobId = r.jobId;
       } catch (e) {
@@ -86,7 +95,11 @@ export function AddServerDialog({ open, onOpenChange }: Props) {
       name: '',
       labelsJson: '{}',
     });
+    setRunAsKind('system');
+    setRunAsUser('');
+    setRunAsPassword('');
     setLabelsErr(null);
+    setRunAsErr(null);
   }
 
   function submit(e: FormEvent) {
@@ -103,12 +116,31 @@ export function AddServerDialog({ open, onOpenChange }: Props) {
     }
     setLabelsErr(null);
 
+    let runAs: { kind: 'password' | 'gmsa'; user: string; password?: string } | undefined;
+    if (runAsKind === 'password') {
+      if (!runAsUser.trim() || !runAsPassword) {
+        setRunAsErr('Username and password are required for password run-as.');
+        return;
+      }
+      runAs = { kind: 'password', user: runAsUser.trim(), password: runAsPassword };
+    } else if (runAsKind === 'gmsa') {
+      if (!runAsUser.trim()) {
+        setRunAsErr('Username (e.g. CONTOSO\\dscgmsa$) is required for gMSA.');
+        return;
+      }
+      runAs = { kind: 'gmsa', user: runAsUser.trim() };
+    }
+    setRunAsErr(null);
+
     createServer.mutate({
-      azureSubscriptionId: form.azureSubscriptionId.trim(),
-      azureResourceGroup: form.azureResourceGroup.trim(),
-      azureVmName: form.azureVmName.trim(),
-      name: form.name.trim() || undefined,
-      labels,
+      body: {
+        azureSubscriptionId: form.azureSubscriptionId.trim(),
+        azureResourceGroup: form.azureResourceGroup.trim(),
+        azureVmName: form.azureVmName.trim(),
+        name: form.name.trim() || undefined,
+        labels,
+      },
+      runAs,
     });
   }
 
@@ -171,6 +203,74 @@ export function AddServerDialog({ open, onOpenChange }: Props) {
               onChange={(e) => setForm({ ...form, labelsJson: e.target.value })}
             />
             {labelsErr && <span className="text-xs text-destructive">{labelsErr}</span>}
+          </div>
+          <div className="grid gap-1.5 border-t pt-3">
+            <Label>Run-as identity</Label>
+            <p className="text-xs text-muted-foreground">
+              Identity that runs <code>DscV3-Apply</code> on the box. Password is encrypted at
+              rest, transmitted via a one-time URL, and never persisted in Azure Run-Command
+              instance view.
+            </p>
+            <div className="flex gap-3 text-sm">
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="runAsKind"
+                  value="system"
+                  checked={runAsKind === 'system'}
+                  onChange={() => setRunAsKind('system')}
+                />
+                SYSTEM
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="runAsKind"
+                  value="password"
+                  checked={runAsKind === 'password'}
+                  onChange={() => setRunAsKind('password')}
+                />
+                Password account
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="runAsKind"
+                  value="gmsa"
+                  checked={runAsKind === 'gmsa'}
+                  onChange={() => setRunAsKind('gmsa')}
+                />
+                gMSA
+              </label>
+            </div>
+            {runAsKind !== 'system' && (
+              <>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="runAsUser">
+                    {runAsKind === 'gmsa' ? 'gMSA (DOMAIN\\name$)' : 'Username (DOMAIN\\user)'}
+                  </Label>
+                  <Input
+                    id="runAsUser"
+                    placeholder={runAsKind === 'gmsa' ? 'CONTOSO\\dscgmsa$' : 'CONTOSO\\dscop'}
+                    value={runAsUser}
+                    onChange={(e) => setRunAsUser(e.target.value)}
+                  />
+                </div>
+                {runAsKind === 'password' && (
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="runAsPassword">Password</Label>
+                    <Input
+                      id="runAsPassword"
+                      type="password"
+                      autoComplete="new-password"
+                      value={runAsPassword}
+                      onChange={(e) => setRunAsPassword(e.target.value)}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+            {runAsErr && <span className="text-xs text-destructive">{runAsErr}</span>}
           </div>
           <DialogFooter>
             <Button

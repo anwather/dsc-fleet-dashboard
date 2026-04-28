@@ -86,6 +86,7 @@ model Server {
   deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   agentKeys     AgentKey[]
+  agentCredentials AgentCredential[]
   modules       ServerModule[]
   assignments   Assignment[]
   jobs          Job[]
@@ -114,6 +115,43 @@ model AgentKey {
   @@index([serverId])
   @@index([keyHash])
   @@map("agent_keys")
+}
+
+/// One-time run-as credential drop, fetched by the agent during bootstrap.
+///
+/// Flow:
+///   - UI submits run-as creds with the provision request.
+///   - API encrypts the password (AES-256-GCM with RUNAS_MASTER_KEY), inserts
+///     a row, and embeds only `https://<dashboard>/api/agents/runas/<urlToken>`
+///     into the Run-Command provisioning script.
+///   - Bootstrap script calls the URL with `Authorization: Bearer <provisionToken>`.
+///   - Server verifies provisionToken matches, sets consumedAt atomically, and
+///     returns {username, password, kind}. Subsequent calls fail.
+///   - Scheduler scrubs ciphertext on consumed/expired rows.
+///
+/// `kind = 'gmsa'` rows have empty ciphertext/iv/authTag — gMSA names aren't
+/// secrets, but routing them through the same flow keeps the script and UI
+/// consistent.
+model AgentCredential {
+  id              String    @id @default(uuid()) @db.Uuid
+  serverId        String    @map("server_id") @db.Uuid
+  jobId           String?   @map("job_id") @db.Uuid
+  provisionToken  String    @map("provision_token")
+  urlToken        String    @unique @map("url_token")
+  username        String
+  kind            String
+  iv              Bytes     @default("")
+  ciphertext      Bytes     @default("")
+  authTag         Bytes     @default("") @map("auth_tag")
+  expiresAt       DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt      DateTime? @map("consumed_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  server          Server    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@index([serverId])
+  @@index([expiresAt])
+  @@map("agent_credentials")
 }
 
 model ServerModule {

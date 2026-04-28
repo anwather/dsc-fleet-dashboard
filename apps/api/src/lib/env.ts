@@ -35,6 +35,27 @@ const EnvSchema = z.object({
     .string()
     .url()
     .default('https://aka.ms/dsc/schemas/v3/bundled/config/document.json'),
+
+  // 32-byte AES-256-GCM master key, base64-encoded. Used to encrypt run-as
+  // credentials at rest in `agent_credentials`. Generate with:
+  //   openssl rand -base64 32
+  // Optional: when unset, the API will refuse to issue credential URLs (the
+  // run-as flow returns 503). SYSTEM and gMSA flows still work without it.
+  RUNAS_MASTER_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : undefined))
+    .refine(
+      (v) => {
+        if (v === undefined) return true;
+        try {
+          return Buffer.from(v, 'base64').length === 32;
+        } catch {
+          return false;
+        }
+      },
+      { message: 'RUNAS_MASTER_KEY must be a base64-encoded 32-byte value (try `openssl rand -base64 32`)' },
+    ),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

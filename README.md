@@ -48,6 +48,40 @@ restarts the deployments, and waits for rollouts. Re-run it any time after
 code changes — `--rebuild-only`, `--apply-only`, and `--no-wait` flags are
 available for tighter loops.
 
+### Run-as credential encryption (optional)
+
+If you plan to use the **Add server → Password run-as** flow (so the agent's
+`DscV3-Apply` task runs under a regular service account rather than `SYSTEM`
+or a gMSA), the API needs an AES-256-GCM master key:
+
+```pwsh
+# Generate a 32-byte base64 key once and store it as a k8s Secret
+$key = openssl rand -base64 32
+kubectl -n dsc-fleet create secret generic dsc-fleet-runas `
+    --from-literal=RUNAS_MASTER_KEY=$key
+```
+
+Reference the secret in your API deployment env (e.g., `k8s/api-deployment.yaml`)
+or via `.env` for docker-compose:
+
+```yaml
+# k8s/api-deployment.yaml (excerpt)
+env:
+  - name: RUNAS_MASTER_KEY
+    valueFrom:
+      secretKeyRef:
+        name: dsc-fleet-runas
+        key: RUNAS_MASTER_KEY
+```
+
+`RUNAS_MASTER_KEY` is **only required for password run-as**. SYSTEM and gMSA
+flows do not encrypt anything and work without the key. If the key is missing
+and a user submits a password identity, the API returns **503**.
+
+Rotation note: changing `RUNAS_MASTER_KEY` invalidates any unconsumed credential
+URLs (consumed ones are already scrubbed). Plan rotation when no provisioning
+jobs are in flight.
+
 For the per-manifest walkthrough and ops/troubleshooting, see
 [`k8s/README.md`](k8s/README.md). The cluster bundles a single-replica
 Postgres `StatefulSet` with a PVC for durable storage between

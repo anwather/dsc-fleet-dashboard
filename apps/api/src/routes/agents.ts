@@ -10,6 +10,7 @@ import { authenticateAgent, hashAgentKey } from '../lib/agentAuth.js';
 import { generateToken } from '../lib/tokens.js';
 import { strongEtag, normalizeEtag } from '../lib/etag.js';
 import { reconcileAssignmentPrereq } from '../services/scheduler.js';
+import { decrypt } from '../lib/runasCrypto.js';
 
 const RegisterBody = z.object({
   provisionToken: z.string().min(1),
@@ -453,6 +454,107 @@ const route: FastifyPluginAsync = async (app) => {
       return reply.status(200).send({ ok: true });
     },
   );
+
+  // -------------------------------------------------------------------------
+  // POST /runas/:urlToken — one-time run-as credential drop.
+  //
+  // Auth: `Authorization: Bearer <provisionToken>`. The provisionToken must
+  // match the value stored in the credential row when it was issued. Single
+  // use enforced by an atomic UPDATE setting consumed_at.
+  //
+  // Response: { username, kind, password? }. password is omitted for gMSA.
+  //
+  // Side effects: ciphertext / iv / auth_tag are zeroed on the row after
+  // successful read so a later DB compromise can't recover the password.
+  // -------------------------------------------------------------------------
+  app.post<{ Params: { urlToken: string } }>('/runas/:urlToken', async (req, reply) => {
+    const auth = req.headers['authorization'];
+    if (typeof auth !== 'string' || !auth.toLowerCase().startsWith('bearer ')) {
+      return reply.status(401).send({ error: 'Unauthorized', message: 'Bearer token required' });
+    }
+    const provisionToken = auth.slice(7).trim();
+    if (!provisionToken) {
+      return reply.status(401).send({ error: 'Unauthorized', message: 'Empty bearer token' });
+    }
+
+    const urlToken = req.params.urlToken;
+    if (!urlToken || urlToken.length < 16) {
+      return reply.status(400).send({ error: 'BadRequest', message: 'invalid url token' });
+    }
+
+    // Atomic single-use: set consumed_at only if currently null, not expired,
+    // and provisionToken matches. Postgres UPDATE...RETURNING is atomic.
+    const now = new Date();
+    const rows = await prisma.$queryRaw<
+      Array<{
+        id: string;
+        server_id: string;
+        username: string;
+        kind: string;
+        iv: Buffer;
+        ciphertext: Buffer;
+        auth_tag: Buffer;
+      }>
+    >`
+      UPDATE agent_credentials
+      SET consumed_at = ${now}
+      WHERE url_token = ${urlToken}
+        AND consumed_at IS NULL
+        AND expires_at > ${now}
+        AND provision_token = ${provisionToken}
+      RETURNING id, server_id, username, kind, iv, ciphertext, auth_tag
+    `;
+    const row = rows[0];
+    if (!row) {
+      // Could be: bad urlToken, already consumed, expired, or provisionToken
+      // mismatch. Don't disclose which.
+      return reply
+        .status(401)
+        .send({ error: 'Unauthorized', message: 'credential unavailable' });
+    }
+
+    let password: string | undefined;
+    if (row.kind === 'password') {
+      try {
+        password = decrypt({
+          iv: Buffer.from(row.iv),
+          ciphertext: Buffer.from(row.ciphertext),
+          authTag: Buffer.from(row.auth_tag),
+        });
+      } catch (err) {
+        logger.error({ err, credentialId: row.id }, 'failed to decrypt run-as credential');
+        return reply
+          .status(500)
+          .send({ error: 'InternalError', message: 'decrypt failed' });
+      }
+    }
+
+    // Scrub ciphertext immediately. The row is kept (consumed_at audit) but
+    // the encrypted material is no longer recoverable.
+    const empty = Buffer.alloc(0);
+    await prisma.agentCredential.update({
+      where: { id: row.id },
+      data: { iv: empty, ciphertext: empty, authTag: empty },
+    });
+
+    await prisma.auditEvent.create({
+      data: {
+        eventType: 'runas.credential.consumed',
+        entityType: 'server',
+        entityId: row.server_id,
+        actorType: 'agent',
+        actorId: null,
+        payload: { kind: row.kind, user: row.username },
+      },
+    });
+
+    const body: { username: string; kind: string; password?: string } = {
+      username: row.username,
+      kind: row.kind,
+    };
+    if (password !== undefined) body.password = password;
+    return reply.status(200).send(body);
+  });
 };
 
 export default route;

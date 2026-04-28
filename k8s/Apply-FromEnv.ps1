@@ -227,6 +227,28 @@ if (-not $env['AZURE_TENANT_ID']) {
     Write-Warning "AZURE_TENANT_ID is empty — Azure provisioning endpoints will return clear errors. Fine for a UI-only walkthrough."
 }
 
+# --- 4b. runas-credentials Secret (optional) --------------------------------
+# Holds RUNAS_MASTER_KEY (32 bytes base64). Only required for password run-as.
+# Apply only when the env var is set so we don't blat an existing kubectl-managed
+# secret with an empty value.
+
+if ($env['RUNAS_MASTER_KEY']) {
+    $runAsKeyB64 = ConvertTo-Base64 $env['RUNAS_MASTER_KEY']
+    $runAsSecret = @"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: runas-credentials
+  namespace: $Namespace
+type: Opaque
+data:
+  RUNAS_MASTER_KEY: $runAsKeyB64
+"@
+    Invoke-KubectlApplyStdin -Yaml $runAsSecret -Description 'secret/runas-credentials'
+} else {
+    Write-Host "    (RUNAS_MASTER_KEY not set — password run-as will return 503 until configured)" -ForegroundColor DarkGray
+}
+
 # --- 5. Workloads ------------------------------------------------------------
 
 $workloads = @(
