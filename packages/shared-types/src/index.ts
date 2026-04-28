@@ -193,6 +193,14 @@ export const AssignmentSummary = z.object({
   // Optional joined view fields
   configName: z.string().optional(),
   serverName: z.string().optional(),
+  // Resolved config revision the agent will apply: pinnedRevision.version
+  // when pinned, else config.currentRevision.version. Null when the config
+  // has no revisions yet.
+  revisionVersion: z.number().int().positive().nullable().optional(),
+  // Latest published revision version on the underlying config. When
+  // greater than `revisionVersion`, the UI surfaces an "update available"
+  // affordance so the user can opt-in.
+  latestRevisionVersion: z.number().int().positive().nullable().optional(),
 });
 export type AssignmentSummary = z.infer<typeof AssignmentSummary>;
 
@@ -206,6 +214,7 @@ export type AssignmentCreate = z.infer<typeof AssignmentCreate>;
 export const AssignmentUpdate = z.object({
   intervalMinutes: z.number().int().positive().optional(),
   enabled: z.boolean().optional(),
+  pinnedRevisionId: z.string().uuid().nullable().optional(),
 });
 export type AssignmentUpdate = z.infer<typeof AssignmentUpdate>;
 

@@ -25,6 +25,7 @@ const AssignmentCreate = z.object({
 const AssignmentUpdate = z.object({
   intervalMinutes: z.number().int().positive().optional(),
   enabled: z.boolean().optional(),
+  pinnedRevisionId: z.string().uuid().nullable().optional(),
 });
 
 interface AssignmentLite {
@@ -82,7 +83,8 @@ const route: FastifyPluginAsync = async (app) => {
         orderBy: { createdAt: 'desc' },
         include: {
           server: { select: { name: true } },
-          config: { select: { name: true } },
+          config: { select: { name: true, currentRevision: { select: { version: true } } } },
+          pinnedRevision: { select: { version: true } },
         },
       });
       return reply.send(
@@ -90,6 +92,9 @@ const route: FastifyPluginAsync = async (app) => {
           ...shape(a),
           serverName: a.server?.name,
           configName: a.config?.name,
+          revisionVersion:
+            a.pinnedRevision?.version ?? a.config?.currentRevision?.version ?? null,
+          latestRevisionVersion: a.config?.currentRevision?.version ?? null,
         })),
       );
     },
@@ -100,11 +105,18 @@ const route: FastifyPluginAsync = async (app) => {
       where: { id: req.params.id },
       include: {
         server: { select: { name: true } },
-        config: { select: { name: true } },
+        config: { select: { name: true, currentRevision: { select: { version: true } } } },
+        pinnedRevision: { select: { version: true } },
       },
     });
     if (!a) return reply.status(404).send({ error: 'NotFound' });
-    return reply.send({ ...shape(a), serverName: a.server?.name, configName: a.config?.name });
+    return reply.send({
+      ...shape(a),
+      serverName: a.server?.name,
+      configName: a.config?.name,
+      revisionVersion: a.pinnedRevision?.version ?? a.config?.currentRevision?.version ?? null,
+      latestRevisionVersion: a.config?.currentRevision?.version ?? null,
+    });
   });
 
   app.post('/', async (req, reply) => {
@@ -143,6 +155,9 @@ const route: FastifyPluginAsync = async (app) => {
         configId: body.configId,
         generation,
         intervalMinutes,
+        // Pin to the current revision at create time so future revisions don't
+        // auto-apply. The user can opt-in to upgrades via PATCH pinnedRevisionId.
+        pinnedRevisionId: config.currentRevisionId ?? null,
         nextDueAt: new Date(),
       },
     });
@@ -174,11 +189,32 @@ const route: FastifyPluginAsync = async (app) => {
         .status(409)
         .send({ error: 'Conflict', message: `cannot edit assignment in state ${a.lifecycleState}` });
     }
+
+    // If pinnedRevisionId is supplied, validate it belongs to this config.
+    if (body.pinnedRevisionId !== undefined && body.pinnedRevisionId !== null) {
+      const rev = await prisma.configRevision.findUnique({
+        where: { id: body.pinnedRevisionId },
+        select: { configId: true },
+      });
+      if (!rev || rev.configId !== a.configId) {
+        return reply
+          .status(400)
+          .send({ error: 'BadRequest', message: 'pinnedRevisionId does not belong to this config' });
+      }
+    }
+
+    const newPinned = body.pinnedRevisionId !== undefined ? body.pinnedRevisionId : a.pinnedRevisionId;
+    const revisionChanged = newPinned !== a.pinnedRevisionId;
+
     const updated = await prisma.assignment.update({
       where: { id: a.id },
       data: {
         intervalMinutes: body.intervalMinutes ?? a.intervalMinutes,
         enabled: body.enabled ?? a.enabled,
+        pinnedRevisionId: newPinned,
+        // Bump generation + force re-due so the agent picks up the new revision
+        // on its next poll instead of waiting for the current interval.
+        ...(revisionChanged ? { generation: a.generation + 1, nextDueAt: new Date() } : {}),
       },
     });
     req.audit({

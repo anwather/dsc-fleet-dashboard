@@ -32,12 +32,13 @@ import { RelativeTime } from '@/components/RelativeTime';
 import { BackendIncomplete } from '@/components/BackendIncomplete';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { RefreshButton } from '@/components/ui/RefreshButton';
-import { apiDelete, apiGet, apiPost, ApiError, softFetch } from '@/lib/api';
+import { apiDelete, apiGet, apiPatch, apiPost, ApiError, softFetch } from '@/lib/api';
 import { useWsTopic } from '@/hooks/useWebSocket';
 import { useToast } from '@/components/ToastProvider';
 import type {
   ServerSummary,
   AssignmentSummary,
+  ConfigSummary,
   RunResultSummary,
   ServerModuleSummary,
   AuditEventSummary,
@@ -452,6 +453,13 @@ function JobCard({ job }: { job: JobSummary }) {
   );
 }
 
+/**
+ * Lifecycle states the user can act on. Terminal states (`removed`,
+ * `removal_expired`) are filtered out — they're noise and confuse the
+ * "X configs assigned" header on the Assignments page.
+ */
+const ACTIONABLE_LIFECYCLES = new Set(['active', 'removing']);
+
 function AssignmentsTab({ serverId }: { serverId: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -460,12 +468,36 @@ function AssignmentsTab({ serverId }: { serverId: string }) {
     queryKey: ['assignments', { serverId }],
     queryFn: () => softFetch(() => apiGet<AssignmentSummary[]>(`/assignments?serverId=${serverId}`)),
   });
+  // Configs are needed to resolve the latest revision id for the
+  // "update to vN" action. The /assignments payload only carries the
+  // latest version number, not the revision uuid required by PATCH.
+  const configsQ = useQuery<ConfigSummary[] | null>({
+    queryKey: ['configs'],
+    queryFn: () => softFetch(() => apiGet<ConfigSummary[]>('/configs')),
+  });
+  const configCurrentRevision = (() => {
+    const m = new Map<string, { id: string; version: number } | null>();
+    for (const c of configsQ.data ?? []) {
+      m.set(c.id, c.currentRevision ? { id: c.currentRevision.id, version: c.currentRevision.version } : null);
+    }
+    return m;
+  })();
+  const visible = (data ?? []).filter((a) => ACTIONABLE_LIFECYCLES.has(a.lifecycleState));
+
+  const isForce = removeTarget?.lifecycleState === 'removing';
   const remove = useMutation({
-    mutationFn: (assignmentId: string) => apiDelete(`/assignments/${assignmentId}`),
+    mutationFn: (a: AssignmentSummary) =>
+      a.lifecycleState === 'removing'
+        ? apiPost(`/assignments/${a.id}/force-remove`, {})
+        : apiDelete(`/assignments/${a.id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['assignments', { serverId }] });
       qc.invalidateQueries({ queryKey: ['assignments'] });
-      toast({ title: 'Removal requested', variant: 'success' });
+      qc.invalidateQueries({ queryKey: ['configs'] });
+      toast({
+        title: isForce ? 'Assignment force-removed' : 'Removal requested',
+        variant: 'success',
+      });
       setRemoveTarget(null);
     },
     onError: (e: unknown) => {
@@ -478,6 +510,22 @@ function AssignmentsTab({ serverId }: { serverId: string }) {
       toast({ title: 'Remove failed', description: msg, variant: 'destructive' });
     },
   });
+  const updateRevision = useMutation({
+    mutationFn: ({ id, pinnedRevisionId }: { id: string; pinnedRevisionId: string }) =>
+      apiPatch<AssignmentSummary>(`/assignments/${id}`, { pinnedRevisionId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['assignments', { serverId }] });
+      qc.invalidateQueries({ queryKey: ['assignments'] });
+      qc.invalidateQueries({ queryKey: ['configs'] });
+      toast({ title: 'Revision updated', variant: 'success' });
+    },
+    onError: (e: unknown) =>
+      toast({
+        title: 'Update failed',
+        description: e instanceof Error ? e.message : String(e),
+        variant: 'destructive',
+      }),
+  });
   if (isLoading) return <Skeleton className="h-40 w-full" />;
   if (error && !(error instanceof ApiError && error.notImplemented))
     return <div className="text-sm text-destructive">{(error as Error).message}</div>;
@@ -489,6 +537,7 @@ function AssignmentsTab({ serverId }: { serverId: string }) {
         <TableHeader>
           <TableRow>
             <TableHead>Config</TableHead>
+            <TableHead>Revision</TableHead>
             <TableHead>Interval</TableHead>
             <TableHead>Lifecycle</TableHead>
             <TableHead>Prereqs</TableHead>
@@ -499,73 +548,114 @@ function AssignmentsTab({ serverId }: { serverId: string }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {(data ?? []).length === 0 && (
+          {visible.length === 0 && (
             <TableRow>
-              <TableCell colSpan={8} className="py-6 text-center text-muted-foreground">
+              <TableCell colSpan={9} className="py-6 text-center text-muted-foreground">
                 No assignments. Use the <Link to="/assignments" className="underline">Assignments</Link> page to add one.
               </TableCell>
             </TableRow>
           )}
-          {data?.map((a) => (
-            <TableRow key={a.id}>
-              <TableCell>
-                <Link to={`/configs/${a.configId}`} className="font-medium hover:underline">
-                  {a.configName ?? a.configId.slice(0, 8)}
-                </Link>
-              </TableCell>
-              <TableCell>{a.intervalMinutes} min</TableCell>
-              <TableCell>
-                <LifecyclePill state={a.lifecycleState} />
-              </TableCell>
-              <TableCell>
-                <PrereqPill status={a.prereqStatus} />
-              </TableCell>
-              <TableCell>
-                <LastStatusPill status={a.lastStatus} />
-              </TableCell>
-              <TableCell>
-                <RelativeTime iso={a.lastRunAt} />
-              </TableCell>
-              <TableCell>
-                <RelativeTime iso={a.nextDueAt} />
-              </TableCell>
-              <TableCell className="text-right">
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  title={
-                    a.lifecycleState === 'active'
-                      ? 'Remove this assignment'
-                      : `Cannot remove (state: ${a.lifecycleState})`
-                  }
-                  disabled={a.lifecycleState !== 'active' || remove.isPending}
-                  onClick={() => setRemoveTarget(a)}
-                  className="text-muted-foreground hover:text-destructive"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
+          {visible.map((a) => {
+            const force = a.lifecycleState === 'removing';
+            const cur = configCurrentRevision.get(a.configId);
+            const updateAvailable =
+              a.revisionVersion != null && cur && cur.version > a.revisionVersion;
+            return (
+              <TableRow key={a.id}>
+                <TableCell>
+                  <Link to={`/configs/${a.configId}`} className="font-medium hover:underline">
+                    {a.configName ?? a.configId.slice(0, 8)}
+                  </Link>
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground">
+                      {a.revisionVersion != null ? `v${a.revisionVersion}` : '—'}
+                    </span>
+                    {updateAvailable && cur && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 border-amber-500/40 bg-amber-500/10 px-2 text-[11px] text-amber-700 hover:bg-amber-500/20 dark:text-amber-400"
+                        disabled={updateRevision.isPending || a.lifecycleState !== 'active'}
+                        title={
+                          a.lifecycleState === 'active'
+                            ? `Update assignment to v${cur.version} (latest)`
+                            : 'Cannot update — assignment is not active'
+                        }
+                        onClick={() =>
+                          updateRevision.mutate({ id: a.id, pinnedRevisionId: cur.id })
+                        }
+                      >
+                        v{cur.version} available
+                      </Button>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell>{a.intervalMinutes} min</TableCell>
+                <TableCell>
+                  <LifecyclePill state={a.lifecycleState} />
+                </TableCell>
+                <TableCell>
+                  <PrereqPill status={a.prereqStatus} />
+                </TableCell>
+                <TableCell>
+                  <LastStatusPill status={a.lastStatus} />
+                </TableCell>
+                <TableCell>
+                  <RelativeTime iso={a.lastRunAt} />
+                </TableCell>
+                <TableCell>
+                  <RelativeTime iso={a.nextDueAt} />
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    title={
+                      force
+                        ? 'Force-remove this stuck assignment (skips agent ack)'
+                        : 'Remove this assignment'
+                    }
+                    disabled={remove.isPending}
+                    onClick={() => setRemoveTarget(a)}
+                    className="text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
       <ConfirmDialog
         open={!!removeTarget}
         onOpenChange={(o) => !o && setRemoveTarget(null)}
-        title="Remove this assignment?"
+        title={isForce ? 'Force-remove this assignment?' : 'Remove this assignment?'}
         description={
           removeTarget ? (
-            <span>
-              The agent will stop applying{' '}
-              <span className="font-medium">{removeTarget.configName ?? removeTarget.configId.slice(0, 8)}</span>{' '}
-              on its next check-in. Run history is preserved.
-            </span>
+            isForce ? (
+              <span>
+                <span className="font-medium">{removeTarget.configName ?? removeTarget.configId.slice(0, 8)}</span>{' '}
+                is stuck in <span className="font-medium">removing</span>. Force-remove skips
+                the agent acknowledgement and marks it as terminal so the slot is freed for a
+                new assignment. Use this when the agent is offline or the previous removal never
+                completed.
+              </span>
+            ) : (
+              <span>
+                The agent will stop applying{' '}
+                <span className="font-medium">{removeTarget.configName ?? removeTarget.configId.slice(0, 8)}</span>{' '}
+                on its next check-in. Run history is preserved.
+              </span>
+            )
           ) : null
         }
-        confirmLabel="Remove assignment"
+        confirmLabel={isForce ? 'Force remove' : 'Remove assignment'}
         destructive
         busy={remove.isPending}
-        onConfirm={() => removeTarget && remove.mutate(removeTarget.id)}
+        onConfirm={() => removeTarget && remove.mutate(removeTarget)}
       />
     </div>
   );

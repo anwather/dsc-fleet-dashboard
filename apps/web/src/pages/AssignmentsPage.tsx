@@ -31,6 +31,15 @@ import type {
 const PAGE_SIZE = 25;
 const INTERVAL_OPTIONS = [5, 10, 15, 30, 60, 120, 240, 1440];
 
+/**
+ * Lifecycle states the user can act on. Terminal states (`removed`,
+ * `removal_expired`) are filtered out so stale chips don't pollute the
+ * per-server "X configs assigned" count or block re-adding the same
+ * config (which the API permits because the partial unique index only
+ * covers `active`+`removing`).
+ */
+const ACTIONABLE_LIFECYCLES = new Set(['active', 'removing']);
+
 type AddPicker = { serverId: string; serverName: string };
 type ChipMenu = { assignment: AssignmentSummary; configName: string; serverName: string };
 
@@ -68,9 +77,12 @@ export function AssignmentsPage() {
   });
 
   // Group assignments by serverId for the per-server list rendering.
+  // Terminal-state rows are filtered out — they're not actionable and
+  // they confuse the "X configs assigned" count + addAvailable picker.
   const byServer = useMemo(() => {
     const m = new Map<string, AssignmentSummary[]>();
     for (const a of assignments.data ?? []) {
+      if (!ACTIONABLE_LIFECYCLES.has(a.lifecycleState)) continue;
       const arr = m.get(a.serverId) ?? [];
       arr.push(a);
       m.set(a.serverId, arr);
@@ -82,6 +94,16 @@ export function AssignmentsPage() {
   const configName = useMemo(() => {
     const m = new Map<string, string>();
     for (const c of configs.data ?? []) m.set(c.id, c.name);
+    return m;
+  }, [configs.data]);
+
+  // Quick lookup: configId → current revision (id + version) for the
+  // "update available" affordance on assignment chips.
+  const configCurrentRevision = useMemo(() => {
+    const m = new Map<string, { id: string; version: number } | null>();
+    for (const c of configs.data ?? []) {
+      m.set(c.id, c.currentRevision ? { id: c.currentRevision.id, version: c.currentRevision.version } : null);
+    }
     return m;
   }, [configs.data]);
 
@@ -125,11 +147,38 @@ export function AssignmentsPage() {
       }),
   });
 
-  const remove = useMutation({
-    mutationFn: (assignmentId: string) => apiDelete(`/assignments/${assignmentId}`),
+  const updateRevision = useMutation({
+    mutationFn: ({ id, pinnedRevisionId }: { id: string; pinnedRevisionId: string }) =>
+      apiPatch<AssignmentSummary>(`/assignments/${id}`, { pinnedRevisionId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['assignments'] });
-      toast({ title: 'Removal requested', variant: 'success' });
+      qc.invalidateQueries({ queryKey: ['configs'] });
+      toast({ title: 'Revision updated', variant: 'success' });
+      setChipMenu(null);
+    },
+    onError: (e: unknown) =>
+      toast({
+        title: 'Update failed',
+        description: e instanceof Error ? e.message : String(e),
+        variant: 'destructive',
+      }),
+  });
+
+  const remove = useMutation({
+    mutationFn: (a: AssignmentSummary) =>
+      a.lifecycleState === 'removing'
+        ? apiPost(`/assignments/${a.id}/force-remove`, {})
+        : apiDelete(`/assignments/${a.id}`),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['assignments'] });
+      qc.invalidateQueries({ queryKey: ['configs'] });
+      toast({
+        title:
+          variables.lifecycleState === 'removing'
+            ? 'Assignment force-removed'
+            : 'Removal requested',
+        variant: 'success',
+      });
       setRemoveTarget(null);
       setChipMenu(null);
     },
@@ -216,6 +265,10 @@ export function AssignmentsPage() {
                   <div className="flex flex-1 flex-wrap gap-2">
                     {list.map((a) => {
                       const name = configName.get(a.configId) ?? a.configId.slice(0, 8);
+                      const updateAvailable =
+                        a.revisionVersion != null &&
+                        a.latestRevisionVersion != null &&
+                        a.latestRevisionVersion > a.revisionVersion;
                       return (
                         <button
                           key={a.id}
@@ -232,10 +285,22 @@ export function AssignmentsPage() {
                             'group inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs',
                             'hover:border-primary hover:bg-accent transition-colors',
                           )}
-                          title={`${name} · every ${a.intervalMinutes}m — click to manage`}
+                          title={
+                            updateAvailable
+                              ? `${name} v${a.revisionVersion} → v${a.latestRevisionVersion} available · click to update`
+                              : `${name} v${a.revisionVersion ?? '?'} · every ${a.intervalMinutes}m — click to manage`
+                          }
                         >
                           <LifecyclePill state={a.lifecycleState} />
                           <span className="font-medium">{name}</span>
+                          {a.revisionVersion != null && (
+                            <span className="text-muted-foreground">v{a.revisionVersion}</span>
+                          )}
+                          {updateAvailable && (
+                            <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                              v{a.latestRevisionVersion} available
+                            </span>
+                          )}
                           <span className="text-muted-foreground">·</span>
                           <span className="text-muted-foreground">every {a.intervalMinutes}m</span>
                           {a.lastStatus && (
@@ -374,6 +439,11 @@ export function AssignmentsPage() {
               {chipMenu?.configName} on {chipMenu?.serverName}
             </DialogTitle>
             <DialogDescription>
+              {chipMenu?.assignment.revisionVersion != null && (
+                <span className="mr-2 inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-xs font-medium">
+                  revision v{chipMenu.assignment.revisionVersion}
+                </span>
+              )}
               Adjust the cadence, remove this assignment, or jump to the related views.
             </DialogDescription>
           </DialogHeader>
@@ -399,6 +469,31 @@ export function AssignmentsPage() {
             <div className="flex flex-wrap gap-2 text-sm">
               {chipMenu && (
                 <>
+                  {(() => {
+                    const cur = configCurrentRevision.get(chipMenu.assignment.configId);
+                    const av =
+                      chipMenu.assignment.revisionVersion != null &&
+                      cur &&
+                      cur.version > chipMenu.assignment.revisionVersion;
+                    if (!av || !cur) return null;
+                    return (
+                      <Button
+                        size="sm"
+                        variant="default"
+                        disabled={updateRevision.isPending}
+                        onClick={() =>
+                          updateRevision.mutate({
+                            id: chipMenu.assignment.id,
+                            pinnedRevisionId: cur.id,
+                          })
+                        }
+                      >
+                        {updateRevision.isPending
+                          ? 'Updating…'
+                          : `Update to v${cur.version}`}
+                      </Button>
+                    );
+                  })()}
                   <Button asChild variant="ghost" size="sm">
                     <Link to={`/configs/${chipMenu.assignment.configId}`}>View config →</Link>
                   </Button>
@@ -414,8 +509,14 @@ export function AssignmentsPage() {
               variant="destructive"
               onClick={() => chipMenu && setRemoveTarget(chipMenu)}
               disabled={remove.isPending}
+              title={
+                chipMenu?.assignment.lifecycleState === 'removing'
+                  ? 'Force-remove (skips agent ack — use when agent is stuck/offline)'
+                  : 'Soft-remove (agent uninstalls on next check-in)'
+              }
             >
-              <X className="h-4 w-4" /> Remove
+              <X className="h-4 w-4" />
+              {chipMenu?.assignment.lifecycleState === 'removing' ? 'Force remove' : 'Remove'}
             </Button>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setChipMenu(null)}>
@@ -446,20 +547,38 @@ export function AssignmentsPage() {
       <ConfirmDialog
         open={!!removeTarget}
         onOpenChange={(o) => !o && setRemoveTarget(null)}
-        title="Remove this assignment?"
+        title={
+          removeTarget?.assignment.lifecycleState === 'removing'
+            ? 'Force-remove this assignment?'
+            : 'Remove this assignment?'
+        }
         description={
           removeTarget ? (
-            <span>
-              Remove <span className="font-medium">{removeTarget.configName}</span> from{' '}
-              <span className="font-medium">{removeTarget.serverName}</span>? Run history is kept;
-              the agent will stop applying this config on its next check-in.
-            </span>
+            removeTarget.assignment.lifecycleState === 'removing' ? (
+              <span>
+                <span className="font-medium">{removeTarget.configName}</span> on{' '}
+                <span className="font-medium">{removeTarget.serverName}</span> is stuck in{' '}
+                <span className="font-medium">removing</span>. Force-remove skips the agent
+                acknowledgement and marks it as terminal so you can reassign the same config.
+                Use this when the agent is offline or the previous removal never completed.
+              </span>
+            ) : (
+              <span>
+                Remove <span className="font-medium">{removeTarget.configName}</span> from{' '}
+                <span className="font-medium">{removeTarget.serverName}</span>? Run history is kept;
+                the agent will stop applying this config on its next check-in.
+              </span>
+            )
           ) : null
         }
-        confirmLabel="Remove assignment"
+        confirmLabel={
+          removeTarget?.assignment.lifecycleState === 'removing'
+            ? 'Force remove'
+            : 'Remove assignment'
+        }
         destructive
         busy={remove.isPending}
-        onConfirm={() => removeTarget && remove.mutate(removeTarget.assignment.id)}
+        onConfirm={() => removeTarget && remove.mutate(removeTarget.assignment)}
       />
     </div>
   );
