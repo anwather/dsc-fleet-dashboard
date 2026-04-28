@@ -4,13 +4,23 @@ import * as monaco from 'monaco-editor';
 import { configureMonacoYaml, type MonacoYamlOptions } from 'monaco-yaml';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import yamlWorker from 'monaco-yaml/yaml.worker?worker';
+import { registerDscIntellisense } from '@/lib/dscIntellisense';
 
 /**
  * Monaco editor wired up with monaco-yaml so users get DSC v3 schema
  * completion when authoring config YAML.
  *
- * The DSC v3 bundled schema lives at:
- *   https://aka.ms/dsc/schemas/v3/bundled/config/document.json
+ * The DSC v3 bundled document schema is shipped as a local asset under
+ * `/schemas/dsc-v3-document.json` so we don't depend on aka.ms / GitHub
+ * being reachable from the user's browser, and so monaco-yaml gets a
+ * proper application/json content-type.
+ *
+ * On top of monaco-yaml's schema-driven validation we register a
+ * context-aware completion + hover provider (see dscIntellisense.ts) that
+ * suggests resource `type:` values from a curated catalog and the
+ * properties accepted by each resource — the bundled schema does not
+ * describe per-resource property bags so this layer is required for a
+ * useful authoring experience.
  *
  * monaco-yaml requires a Web Worker — Vite's `?worker` import gives us one.
  */
@@ -39,13 +49,18 @@ function configureOnce() {
     format: true,
     schemas: [
       {
-        // Match any *.dsc.yaml or .yaml file the user is editing in this app.
-        uri: 'https://aka.ms/dsc/schemas/v3/bundled/config/document.json',
+        // Locally hosted copy of the DSC v3 bundled document schema.
+        // The canonical URL is used as the schema's $id so $ref resolution
+        // and "Go to schema" still work, but the actual fetch hits our
+        // own static asset.
+        uri: `${window.location.origin}/schemas/dsc-v3-document.json`,
         fileMatch: ['*'],
       },
     ],
   };
   configureMonacoYaml(monaco, options);
+
+  registerDscIntellisense();
 }
 
 export interface MonacoYamlEditorProps {
