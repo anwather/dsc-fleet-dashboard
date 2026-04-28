@@ -20,12 +20,15 @@ const RegisterBody = z.object({
 });
 
 const HeartbeatBody = z.object({
-  osCaption: z.string().optional(),
-  osVersion: z.string().optional(),
-  dscExeVersion: z.string().optional(),
-  agentVersion: z.string().optional(),
-  modules: z.array(z.object({ name: z.string(), version: z.string() })).default([]),
-  serverTime: z.string().datetime().optional(),
+  osCaption: z.string().nullish(),
+  osVersion: z.string().nullish(),
+  dscExeVersion: z.string().nullish(),
+  agentVersion: z.string().nullish(),
+  modules: z
+    .array(z.object({ name: z.string(), version: z.string() }))
+    .nullish()
+    .transform((v) => v ?? []),
+  serverTime: z.string().datetime().nullish(),
 });
 
 const ResultsBody = z.object({
