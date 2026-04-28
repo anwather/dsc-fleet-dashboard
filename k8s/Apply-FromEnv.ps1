@@ -234,6 +234,14 @@ if (-not $env['AZURE_TENANT_ID']) {
 
 if ($env['RUNAS_MASTER_KEY']) {
     $runAsKeyB64 = ConvertTo-Base64 $env['RUNAS_MASTER_KEY']
+    # Detect drift: if the in-cluster secret value differs from the desired
+    # value (or doesn't exist yet) we need to bounce the api pod so envFrom
+    # picks up the new RUNAS_MASTER_KEY. Kubernetes does NOT auto-restart
+    # pods on Secret changes; without this restart the API stays on its old
+    # env (which is what bit us the first time we set the key after deploy).
+    $existing = & kubectl -n $Namespace get secret runas-credentials `
+                    -o jsonpath='{.data.RUNAS_MASTER_KEY}' 2>$null
+    $needsRestart = ($LASTEXITCODE -ne 0) -or ($existing -ne $runAsKeyB64)
     $runAsSecret = @"
 apiVersion: v1
 kind: Secret
@@ -245,6 +253,11 @@ data:
   RUNAS_MASTER_KEY: $runAsKeyB64
 "@
     Invoke-KubectlApplyStdin -Yaml $runAsSecret -Description 'secret/runas-credentials'
+    if ($needsRestart) {
+        Write-Host '    RUNAS_MASTER_KEY changed; restarting api so envFrom picks it up' `
+            -ForegroundColor Yellow
+        & kubectl -n $Namespace rollout restart deployment/api | Out-Null
+    }
 } else {
     Write-Host "    (RUNAS_MASTER_KEY not set — password run-as will return 503 until configured)" -ForegroundColor DarkGray
 }
