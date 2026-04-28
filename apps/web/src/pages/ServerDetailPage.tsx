@@ -453,9 +453,30 @@ function JobCard({ job }: { job: JobSummary }) {
 }
 
 function AssignmentsTab({ serverId }: { serverId: string }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [removeTarget, setRemoveTarget] = useState<AssignmentSummary | null>(null);
   const { data, isLoading, error } = useQuery<AssignmentSummary[] | null>({
     queryKey: ['assignments', { serverId }],
     queryFn: () => softFetch(() => apiGet<AssignmentSummary[]>(`/assignments?serverId=${serverId}`)),
+  });
+  const remove = useMutation({
+    mutationFn: (assignmentId: string) => apiDelete(`/assignments/${assignmentId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['assignments', { serverId }] });
+      qc.invalidateQueries({ queryKey: ['assignments'] });
+      toast({ title: 'Removal requested', variant: 'success' });
+      setRemoveTarget(null);
+    },
+    onError: (e: unknown) => {
+      const msg =
+        e instanceof ApiError && e.body && typeof e.body === 'object' && 'message' in e.body
+          ? String((e.body as { message?: unknown }).message ?? e.message)
+          : e instanceof Error
+          ? e.message
+          : 'Failed to remove assignment';
+      toast({ title: 'Remove failed', description: msg, variant: 'destructive' });
+    },
   });
   if (isLoading) return <Skeleton className="h-40 w-full" />;
   if (error && !(error instanceof ApiError && error.notImplemented))
@@ -474,12 +495,13 @@ function AssignmentsTab({ serverId }: { serverId: string }) {
             <TableHead>Last status</TableHead>
             <TableHead>Last run</TableHead>
             <TableHead>Next due</TableHead>
+            <TableHead className="w-[80px] text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {(data ?? []).length === 0 && (
             <TableRow>
-              <TableCell colSpan={7} className="py-6 text-center text-muted-foreground">
+              <TableCell colSpan={8} className="py-6 text-center text-muted-foreground">
                 No assignments. Use the <Link to="/assignments" className="underline">Assignments</Link> page to add one.
               </TableCell>
             </TableRow>
@@ -507,10 +529,44 @@ function AssignmentsTab({ serverId }: { serverId: string }) {
               <TableCell>
                 <RelativeTime iso={a.nextDueAt} />
               </TableCell>
+              <TableCell className="text-right">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  title={
+                    a.lifecycleState === 'active'
+                      ? 'Remove this assignment'
+                      : `Cannot remove (state: ${a.lifecycleState})`
+                  }
+                  disabled={a.lifecycleState !== 'active' || remove.isPending}
+                  onClick={() => setRemoveTarget(a)}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
+      <ConfirmDialog
+        open={!!removeTarget}
+        onOpenChange={(o) => !o && setRemoveTarget(null)}
+        title="Remove this assignment?"
+        description={
+          removeTarget ? (
+            <span>
+              The agent will stop applying{' '}
+              <span className="font-medium">{removeTarget.configName ?? removeTarget.configId.slice(0, 8)}</span>{' '}
+              on its next check-in. Run history is preserved.
+            </span>
+          ) : null
+        }
+        confirmLabel="Remove assignment"
+        destructive
+        busy={remove.isPending}
+        onConfirm={() => removeTarget && remove.mutate(removeTarget.id)}
+      />
     </div>
   );
 }
