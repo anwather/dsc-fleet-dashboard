@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, AlertTriangle, Save, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, Save, CheckCircle2, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -22,9 +22,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { MonacoYamlEditor } from '@/components/MonacoYamlEditor';
 import { useToast } from '@/components/ToastProvider';
-import { apiGet, apiPatch, apiPost, ApiError, softFetch } from '@/lib/api';
+import { apiDelete, apiGet, apiPatch, apiPost, ApiError, softFetch } from '@/lib/api';
 import { SAMPLES, BLANK_YAML, type Sample } from '@/lib/samples';
 import { cn } from '@/lib/utils';
 import type {
@@ -131,22 +132,59 @@ export function ConfigEditorPage() {
     },
   });
 
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const remove = useMutation({
+    mutationFn: () => apiDelete(`/configs/${id}`),
+    onSuccess: () => {
+      toast({
+        title: 'Config removed',
+        description: existing.data?.name ? `${existing.data.name} hidden. Revision history retained.` : undefined,
+        variant: 'success',
+      });
+      qc.invalidateQueries({ queryKey: ['configs'] });
+      navigate('/configs');
+    },
+    onError: (e: unknown) => {
+      const msg =
+        e instanceof ApiError && e.body && typeof e.body === 'object' && 'message' in e.body
+          ? String((e.body as { message?: unknown }).message ?? e.message)
+          : e instanceof Error
+            ? e.message
+            : 'Failed to remove config';
+      toast({ title: 'Remove failed', description: msg, variant: 'destructive' });
+      setRemoveOpen(false);
+    },
+  });
+
   // Required modules — prefer last validate result, fall back to existing.
   const requiredModules: RequiredModule[] =
     parseResult?.requiredModules ?? existing.data?.currentRevision?.requiredModules ?? [];
 
   return (
     <div className="space-y-4">
-      <div>
-        <Link
-          to="/configs"
-          className="text-sm text-muted-foreground inline-flex items-center gap-1 hover:text-foreground"
-        >
-          <ArrowLeft className="h-3 w-3" /> back to configs
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-          {isNew ? 'New configuration' : `Edit ${existing.data?.name ?? '…'}`}
-        </h1>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <Link
+            to="/configs"
+            className="text-sm text-muted-foreground inline-flex items-center gap-1 hover:text-foreground"
+          >
+            <ArrowLeft className="h-3 w-3" /> back to configs
+          </Link>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+            {isNew ? 'New configuration' : `Edit ${existing.data?.name ?? '…'}`}
+          </h1>
+        </div>
+        {!isNew && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setRemoveOpen(true)}
+            title="Soft-delete this config"
+          >
+            <Trash2 className="h-4 w-4" /> Remove
+          </Button>
+        )}
       </div>
 
       <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
@@ -298,6 +336,24 @@ export function ConfigEditorPage() {
           setActiveSample(null);
           toast({ title: 'Sample applied to editor', variant: 'success' });
         }}
+      />
+
+      <ConfirmDialog
+        open={removeOpen}
+        onOpenChange={setRemoveOpen}
+        title="Remove config?"
+        description={
+          <span>
+            <span className="font-medium">{existing.data?.name ?? 'This config'}</span> will be
+            hidden from all lists. Revisions and run history are kept in the database (soft-delete).
+            The API rejects this if the config still has active or pending-removal assignments —
+            remove those first.
+          </span>
+        }
+        confirmLabel="Remove config"
+        destructive
+        busy={remove.isPending}
+        onConfirm={() => remove.mutate()}
       />
     </div>
   );

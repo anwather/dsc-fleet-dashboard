@@ -52,7 +52,11 @@ const route: FastifyPluginAsync = async (app) => {
       orderBy: { createdAt: 'desc' },
       include: {
         currentRevision: true,
-        _count: { select: { assignments: true } },
+        _count: {
+          select: {
+            assignments: { where: { lifecycleState: { in: ['active', 'removing'] } } },
+          },
+        },
       },
     });
     return reply.send(
@@ -125,7 +129,11 @@ const route: FastifyPluginAsync = async (app) => {
       where: { id: req.params.id },
       include: {
         currentRevision: true,
-        _count: { select: { assignments: true } },
+        _count: {
+          select: {
+            assignments: { where: { lifecycleState: { in: ['active', 'removing'] } } },
+          },
+        },
       },
     });
     if (!c || c.deletedAt) return reply.status(404).send({ error: 'NotFound' });
