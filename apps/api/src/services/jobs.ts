@@ -225,6 +225,18 @@ async function runProvisionJob(jobId: string): Promise<void> {
       await failJob(jobId, 'NonZeroExit', `Run-Command exit ${result.exitCode}`);
       return;
     }
+    // Azure Run-Command's RunPowerShellScript invoker rarely surfaces an exit
+    // code, so a thrown PowerShell error still presents as exitCode=undefined.
+    // The bootstrap script ends with "==> provision complete"; if that line
+    // is missing the script aborted somewhere in the middle.
+    if (!/==> provision complete/.test(result.stdout)) {
+      await failJob(
+        jobId,
+        'BootstrapAborted',
+        'bootstrap did not reach completion sentinel — see stderr in log',
+      );
+      return;
+    }
     await prisma.job.update({
       where: { id: jobId },
       data: { status: 'success', finishedAt: new Date() },
