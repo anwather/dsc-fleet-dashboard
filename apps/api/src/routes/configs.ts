@@ -54,7 +54,12 @@ const route: FastifyPluginAsync = async (app) => {
         currentRevision: true,
         _count: {
           select: {
-            assignments: { where: { lifecycleState: { in: ['active', 'removing'] } } },
+            assignments: {
+              where: {
+                lifecycleState: { in: ['active', 'removing'] },
+                server: { deletedAt: null },
+              },
+            },
           },
         },
       },
@@ -131,7 +136,12 @@ const route: FastifyPluginAsync = async (app) => {
         currentRevision: true,
         _count: {
           select: {
-            assignments: { where: { lifecycleState: { in: ['active', 'removing'] } } },
+            assignments: {
+              where: {
+                lifecycleState: { in: ['active', 'removing'] },
+                server: { deletedAt: null },
+              },
+            },
           },
         },
       },
@@ -252,7 +262,11 @@ const route: FastifyPluginAsync = async (app) => {
     const c = await prisma.config.findUnique({ where: { id: req.params.id } });
     if (!c || c.deletedAt) return reply.status(404).send({ error: 'NotFound' });
     const active = await prisma.assignment.count({
-      where: { configId: c.id, lifecycleState: { in: ['active', 'removing'] } },
+      where: {
+        configId: c.id,
+        lifecycleState: { in: ['active', 'removing'] },
+        server: { deletedAt: null },
+      },
     });
     if (active > 0) {
       return reply.status(409).send({

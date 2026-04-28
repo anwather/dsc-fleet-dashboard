@@ -74,7 +74,11 @@ const route: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: { serverId?: string; configId?: string; lifecycleState?: string } }>(
     '/',
     async (req, reply) => {
-      const where: Record<string, unknown> = {};
+      const where: Record<string, unknown> = {
+        // Hide assignments belonging to soft-deleted servers so the UI list
+        // matches the dashboard counters.
+        server: { deletedAt: null },
+      };
       if (req.query.serverId) where.serverId = req.query.serverId;
       if (req.query.configId) where.configId = req.query.configId;
       if (req.query.lifecycleState) where.lifecycleState = req.query.lifecycleState;

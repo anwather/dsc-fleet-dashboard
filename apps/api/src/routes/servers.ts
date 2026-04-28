@@ -175,10 +175,22 @@ const route: FastifyPluginAsync = async (app) => {
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
     const s = await prisma.server.findUnique({ where: { id: req.params.id } });
     if (!s || s.deletedAt) return reply.status(404).send({ error: 'NotFound' });
-    await prisma.server.update({
-      where: { id: s.id },
-      data: { deletedAt: new Date() },
-    });
+    const now = new Date();
+    await prisma.$transaction([
+      // Close out any open assignments so config counts / scheduler queries
+      // don't keep treating this server's assignments as live.
+      prisma.assignment.updateMany({
+        where: {
+          serverId: s.id,
+          lifecycleState: { in: ['active', 'removing'] },
+        },
+        data: { lifecycleState: 'removed', updatedAt: now },
+      }),
+      prisma.server.update({
+        where: { id: s.id },
+        data: { deletedAt: now },
+      }),
+    ]);
     req.audit({
       eventType: 'server.deleted',
       entityType: 'server',
