@@ -135,13 +135,15 @@ const route: FastifyPluginAsync = async (app) => {
     const generation = (prior?.generation ?? 0) + 1;
     const intervalMinutes = body.intervalMinutes ?? env.DEFAULT_ASSIGNMENT_INTERVAL_MINUTES;
 
+    // nextDueAt = now so the next runner cycle picks the assignment up
+    // immediately instead of waiting one full interval.
     const created = await prisma.assignment.create({
       data: {
         serverId: body.serverId,
         configId: body.configId,
         generation,
         intervalMinutes,
-        nextDueAt: new Date(Date.now() + intervalMinutes * 60_000),
+        nextDueAt: new Date(),
       },
     });
 
