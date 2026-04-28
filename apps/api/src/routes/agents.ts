@@ -149,6 +149,26 @@ const route: FastifyPluginAsync = async (app) => {
         },
       });
 
+      // Lazy-backfill: pin any active assignment that has no pinnedRevisionId
+      // to the config's current revision. This prevents existing pre-pin
+      // assignments from auto-upgrading when a new config revision is
+      // published. After this runs once, subsequent revision publishes only
+      // roll out via an explicit PATCH /assignments/:id from the UI.
+      for (const a of assignments) {
+        if (
+          a.lifecycleState === 'active' &&
+          !a.pinnedRevisionId &&
+          a.config.currentRevisionId
+        ) {
+          await prisma.assignment.update({
+            where: { id: a.id },
+            data: { pinnedRevisionId: a.config.currentRevisionId },
+          });
+          a.pinnedRevisionId = a.config.currentRevisionId;
+          a.pinnedRevision = a.config.currentRevision;
+        }
+      }
+
       const items = assignments.map((a) => {
         const rev = a.pinnedRevision ?? a.config.currentRevision;
         return {
