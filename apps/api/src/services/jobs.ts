@@ -168,7 +168,7 @@ function buildProvisionScript(payload: JobPayloadProvision): string {
     '& (Join-Path $bootstrapDir "Install-DscV3.ps1")',
     'if ($LASTEXITCODE -ne 0) { throw "Install-DscV3 failed (exit $LASTEXITCODE)" }',
     'Write-Host "==> running Register-DashboardAgent"',
-    `& (Join-Path $bootstrapDir 'Register-DashboardAgent.ps1') -DashboardUrl '${dashboardUrl}' -ProvisionToken '${token}'${credArg}`,
+    `& (Join-Path $bootstrapDir 'Register-DashboardAgent.ps1') -DashboardUrl '${dashboardUrl}' -ProvisionToken '${token}'${credArg} -Force`,
     'if ($LASTEXITCODE -ne 0) { throw "Register-DashboardAgent failed (exit $LASTEXITCODE)" }',
     'Write-Host "==> provision complete"',
   ].join('\n');
