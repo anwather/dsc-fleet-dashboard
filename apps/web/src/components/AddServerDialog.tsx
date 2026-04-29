@@ -11,6 +11,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { PasswordInput } from '@/components/ui/PasswordInput';
 import { Textarea } from '@/components/ui/textarea';
 import { apiPost, ApiError } from '@/lib/api';
 import { useToast } from './ToastProvider';
@@ -259,10 +260,8 @@ export function AddServerDialog({ open, onOpenChange }: Props) {
                 {runAsKind === 'password' && (
                   <div className="grid gap-1.5">
                     <Label htmlFor="runAsPassword">Password</Label>
-                    <Input
+                    <PasswordInput
                       id="runAsPassword"
-                      type="password"
-                      autoComplete="new-password"
                       value={runAsPassword}
                       onChange={(e) => setRunAsPassword(e.target.value)}
                     />
