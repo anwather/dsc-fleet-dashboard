@@ -37,3 +37,4 @@ schemas-cache/
 # Local-only deployment parameters — never commit (template: azure/parameters.example.jsonc)
 azure/parameters.json
 
+azure/parameters.jsonc
