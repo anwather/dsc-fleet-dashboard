@@ -17,7 +17,7 @@ function Get-DeploymentParams {
 
     if (-not $Path) {
         $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-        $Path = Join-Path $repoRoot 'azure\parameters.json'
+        $Path = Join-Path $repoRoot 'azure\parameters.jsonc'
     }
 
     if (-not (Test-Path $Path)) {
@@ -38,8 +38,8 @@ Required keys: subscriptionId, location, rgName, labRgName, nameSuffix, displayN
     # Strip // line comments before JSON parse (JSONC support).
     $raw = Get-Content $Path -Raw
     $stripped = ($raw -split "`n" | ForEach-Object {
-        $_ -replace '(^|[^:"])//.*$', '$1'
-    }) -join "`n"
+            $_ -replace '(^|[^:"])//.*$', '$1'
+        }) -join "`n"
 
     try {
         $parsed = $stripped | ConvertFrom-Json -AsHashtable

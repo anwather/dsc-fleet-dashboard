@@ -50,6 +50,15 @@ function Show-ManualSteps {
     param([string] $Reason)
     Write-Host ""
     Write-Host "Cannot create the app registration via az CLI: $Reason" -ForegroundColor Red
+    if ($Reason -match 'TokenCreatedWithOutdatedPolicies|InteractionRequired|continuous access evaluation') {
+        Write-Host ""
+        Write-Host "This is a Continuous Access Evaluation (CAE) challenge — the cached" -ForegroundColor Yellow
+        Write-Host "Microsoft Graph token was invalidated by a tenant policy change." -ForegroundColor Yellow
+        Write-Host "Try this first (one line) and re-run setup-entra.ps1:" -ForegroundColor Yellow
+        Write-Host "  az logout; az login --scope https://graph.microsoft.com/.default" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "If it still fails after a fresh login, fall back to the manual steps below." -ForegroundColor Yellow
+    }
     Write-Host "Manual portal steps:" -ForegroundColor Yellow
     Write-Host "  1. Azure Portal -> Microsoft Entra ID -> App registrations -> New registration"
     Write-Host "     - Name: $DisplayName"
@@ -87,6 +96,55 @@ Write-Host "Display name:  $DisplayName"
 Write-Host "SPA redirects: $WebUrl"
 $ExtraRedirects | ForEach-Object { Write-Host "               $_" }
 
+# Proactively refresh the Microsoft Graph access token. This avoids the most
+# common failure mode for this script:
+#   "Continuous access evaluation resulted in challenge with result:
+#    InteractionRequired and code: TokenCreatedWithOutdatedPolicies"
+# CAE invalidates cached Graph tokens whenever a tenant policy changes
+# (Conditional Access, MFA, sign-in frequency, group membership, etc.). The
+# Azure CLI's silent token refresh can't satisfy CAE on its own, so we force
+# an interactive re-login scoped to Microsoft Graph before any 'az ad ...'
+# call. This is a no-op on a freshly-cached token.
+function Test-GraphToken {
+    $null = az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv 2>$null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Update-GraphTokenInteractive {
+    param([string] $Reason)
+    Write-Host ""
+    Write-Host "Refreshing Microsoft Graph access token..." -ForegroundColor Cyan
+    if ($Reason) { Write-Host "  Reason: $Reason" -ForegroundColor DarkYellow }
+    az login --scope https://graph.microsoft.com/.default --tenant $tenantId --allow-no-subscriptions | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Graph token refresh failed (az login --scope https://graph.microsoft.com/.default exit $LASTEXITCODE)."
+    }
+    # Re-pin the original Azure subscription context (interactive --scope login can switch it)
+    az account set --subscription $p.subscriptionId 2>$null | Out-Null
+}
+
+function Invoke-AzGraph {
+    # Wrap an `az ...` call (passed as a scriptblock) and retry once if CAE
+    # rejects the cached Graph token. Returns combined stdout+stderr; sets
+    # $script:LastExit to the underlying exit code.
+    param(
+        [Parameter(Mandatory)] [scriptblock] $Call,
+        [string] $Description = 'az graph call'
+    )
+    $output = & $Call 2>&1
+    $script:LastExit = $LASTEXITCODE
+    if ($script:LastExit -ne 0 -and ($output -match 'TokenCreatedWithOutdatedPolicies|InteractionRequired|continuous access evaluation' )) {
+        Update-GraphTokenInteractive "CAE challenge during '$Description'"
+        $output = & $Call 2>&1
+        $script:LastExit = $LASTEXITCODE
+    }
+    return $output
+}
+
+if (-not (Test-GraphToken)) {
+    Update-GraphTokenInteractive 'no cached Graph token'
+}
+
 # 1) Create or update the app registration.
 $existingId = az ad app list --display-name $DisplayName --query "[0].appId" -o tsv 2>$null
 if ($existingId) {
@@ -95,11 +153,13 @@ if ($existingId) {
 }
 else {
     Write-Host "`nCreating app registration..." -ForegroundColor Cyan
-    $createJson = az ad app create `
-        --display-name $DisplayName `
-        --sign-in-audience AzureADMyOrg `
-        --output json 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $createJson = Invoke-AzGraph -Description 'az ad app create' -Call {
+        az ad app create `
+            --display-name $DisplayName `
+            --sign-in-audience AzureADMyOrg `
+            --output json
+    }
+    if ($script:LastExit -ne 0) {
         Show-ManualSteps "az ad app create failed: $createJson"
     }
     $appId = ($createJson | ConvertFrom-Json).appId
