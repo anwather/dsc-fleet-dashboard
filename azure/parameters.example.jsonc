@@ -1,0 +1,41 @@
+// Deployment parameters for dsc-fleet-dashboard.
+//
+// 1. Copy this file to `azure/parameters.json` (git-ignored).
+// 2. Edit the values below.
+// 3. Run the four deployment scripts in order — they auto-load this file.
+//
+// All values can still be overridden at the CLI, e.g.
+//   ./azure/scripts/deploy.ps1 -RgName my-rg -SkipWhatIf
+//
+// JSONC: // line comments are tolerated by the PS loader.
+{
+    // === Azure target ===
+    // Subscription you `az login`'d to and where everything is deployed.
+    "subscriptionId": "00000000-0000-0000-0000-000000000000",
+
+    // Azure region for the dashboard resource group + ACA env + ACR + Postgres.
+    // Pick a region with Container Apps + Postgres Flexible + ACR availability.
+    "location": "australiaeast",
+
+    // === Dashboard resource group ===
+    // Created by deploy.ps1 if it does not exist. Holds ACR, UAMI, ACA env,
+    // Log Analytics, storage, Postgres, and the three Container Apps.
+    "rgName": "dsc-fleet-dashboard",
+
+    // === Lab / managed-server resource group ===
+    // Pre-existing RG that contains the Windows Server VMs the dashboard
+    // monitors. deploy.ps1 grants the dashboard's UAMI 'Virtual Machine
+    // Contributor' on this RG (set assignVmContributor=false in code or
+    // pass -SkipLabRbac if the signed-in user lacks Owner here).
+    "labRgName": "dsc-v3",
+
+    // === Name suffix ===
+    // Drives globally-unique resource names: ACR = "dscfleet<suffix>acr",
+    // storage = "dscfleet<suffix>sa". Keep short (2-6 chars), lowercase,
+    // alphanumeric. Change this to avoid name collisions in your tenant.
+    "nameSuffix": "dsc",
+
+    // === Entra app registration display name ===
+    // Used by setup-entra.ps1 when it creates / updates the SPA app.
+    "displayName": "DSC Fleet Dashboard"
+}

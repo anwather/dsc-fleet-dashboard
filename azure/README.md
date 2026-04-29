@@ -4,7 +4,7 @@ Operate-the-infra reference for the Azure Container Apps deployment of
 dsc-fleet-dashboard. For the end-to-end deployment narrative (CI, smoke
 tests, image promotion), see [`../docs/deployment.md`](../docs/deployment.md).
 
-Region: `australiaeast`. Subscription: `01e2f327-74ac-451e-8ad9-1f923a06d634`.
+Region and subscription are set in `azure/parameters.json` (copy from `azure/parameters.example.jsonc`).
 Resource group: `dsc-fleet-dashboard`. Lab RG (cross-RG VM Contributor):
 `dsc-v3`.
 
@@ -33,9 +33,13 @@ azure/
     └── deploy-apps.ps1      ← Phase 4: Postgres flex + Container Apps
 ```
 
-There is no separate `*.bicepparam` file. Parameters are passed inline by the
-PowerShell scripts; secrets live in git-ignored `.azure/secrets.local.json` at
-repo root.
+There is no separate `*.bicepparam` file. Tunable values (subscription,
+location, RG names, name suffix, Entra app display name) live in
+`azure/parameters.json` — copy `azure/parameters.example.jsonc` to
+`azure/parameters.json` and edit before running the scripts. Per-deploy
+secrets (`pgPassword`, `runAsMasterKey`, Entra IDs) live in git-ignored
+`.azure/secrets.local.json` at repo root and are managed automatically
+by the scripts.
 
 See [`../docs/entra-setup.md`](../docs/entra-setup.md) for the Entra app
 registration design and manual portal fallback.
@@ -50,7 +54,11 @@ live. Run from the repo root.
 ```powershell
 # 0. Sign in
 az login
-az account set --subscription 01e2f327-74ac-451e-8ad9-1f923a06d634
+az account set --subscription <YOUR_SUB_ID>
+
+# 0b. Copy the parameters template and edit it for your environment
+Copy-Item azure/parameters.example.jsonc azure/parameters.json
+notepad azure/parameters.json   # set subscriptionId, location, rgName, labRgName, nameSuffix, displayName
 
 # 1. Phase 1 — infra (RG, ACR, UAMI, storage, ACA env, Log Analytics)
 ./azure/scripts/deploy.ps1 -SkipWhatIf
@@ -268,7 +276,7 @@ az role assignment create --assignee-object-id $uamiPid --assignee-principal-typ
 Set as **repository variables** (non-secret):
 - `AZURE_CLIENT_ID` — UAMI clientId (from Phase 1 output `identityClientId`)
 - `AZURE_TENANT_ID` — Entra tenant
-- `AZURE_SUBSCRIPTION_ID` — `01e2f327-74ac-451e-8ad9-1f923a06d634`
+- `AZURE_SUBSCRIPTION_ID` — value of `subscriptionId` from `azure/parameters.json`
 - `ACR_NAME` — `dscfleetdscacr`
 
 `pgPassword`, `runAsMasterKey`, etc. should remain in

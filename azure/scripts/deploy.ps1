@@ -8,15 +8,15 @@
 #                                             # (use if you lack Owner on dsc-v3)
 #
 # Reads from your current az login. Run `az login` and `az account set
-# --subscription 01e2f327-74ac-451e-8ad9-1f923a06d634` first.
+# --subscription <your-subscription-id>` first. Subscription / region / RG / nameSuffix all default to values in azure/parameters.json (copy from azure/parameters.example.jsonc).
 
 [CmdletBinding()]
 param(
-    [string] $SubscriptionId = '01e2f327-74ac-451e-8ad9-1f923a06d634',
-    [string] $Location = 'australiaeast',
-    [string] $RgName = 'dsc-fleet-dashboard',
-    [string] $LabRgName = 'dsc-v3',
-    [string] $NameSuffix = 'dsc',
+    [string] $SubscriptionId,
+    [string] $Location,
+    [string] $RgName,
+    [string] $LabRgName,
+    [string] $NameSuffix,
     [string] $DeploymentName = ('phase1-{0:yyyyMMdd-HHmmss}' -f (Get-Date)),
     [switch] $WhatIfOnly,
     [switch] $SkipWhatIf,
@@ -24,6 +24,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot '_load-params.ps1')
+$p = Get-DeploymentParams
+if (-not $SubscriptionId) { $SubscriptionId = $p.subscriptionId }
+if (-not $Location)       { $Location       = $p.location }
+if (-not $RgName)         { $RgName         = $p.rgName }
+if (-not $LabRgName)      { $LabRgName      = $p.labRgName }
+if (-not $NameSuffix)     { $NameSuffix     = $p.nameSuffix }
 $root = Split-Path -Parent $PSScriptRoot
 $bicep = Join-Path $root 'bicep\main.bicep'
 if (-not (Test-Path $bicep)) {

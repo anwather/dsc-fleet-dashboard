@@ -18,12 +18,16 @@
 
 [CmdletBinding()]
 param(
-    [string] $DisplayName    = 'DSC Fleet Dashboard',
+    [string] $DisplayName,
     [string] $WebUrl         = '',
     [string[]] $ExtraRedirects = @()
 )
 
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot '_load-params.ps1')
+$p = Get-DeploymentParams
+if (-not $DisplayName) { $DisplayName = $p.displayName }
 
 $repoRoot    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $secretsDir  = Join-Path $repoRoot '.azure'

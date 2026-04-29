@@ -12,7 +12,7 @@ Defaults assumed throughout (override per environment):
 
 | Setting | Value |
 |---|---|
-| Subscription | `01e2f327-74ac-451e-8ad9-1f923a06d634` |
+| Subscription | _(your subscription — set in `azure/parameters.json`)_ |
 | Region | `australiaeast` |
 | Dashboard RG | `dsc-fleet-dashboard` |
 | Lab RG (managed VMs) | `dsc-v3` |
@@ -57,9 +57,35 @@ Required identities and rights:
 
 ```powershell
 az login
-az account set --subscription 01e2f327-74ac-451e-8ad9-1f923a06d634
+az account set --subscription <YOUR_SUB_ID>
 az account show --query '{name:name,id:id,tenantId:tenantId}'
 ```
+
+### Deployment parameters file
+
+Tunable per-environment values (subscription ID, region, RG names, name
+suffix, Entra app display name) live in a single git-ignored file at
+`azure/parameters.json`. Copy the committed template and edit before
+running the four scripts:
+
+```powershell
+Copy-Item azure/parameters.example.jsonc azure/parameters.json
+notepad azure/parameters.json
+```
+
+Required keys (the loader fails fast if any are missing or empty):
+
+| Key | Used in | Example |
+|---|---|---|
+| `subscriptionId` | All four scripts | `01e2f327-…` |
+| `location` | `deploy.ps1`, `deploy-apps.ps1` | `australiaeast` |
+| `rgName` | `deploy.ps1`, `deploy-apps.ps1` | `dsc-fleet-dashboard` |
+| `labRgName` | `deploy.ps1` (cross-RG VM Contributor role) | `dsc-v3` |
+| `nameSuffix` | `deploy.ps1`, `deploy-apps.ps1`; derives ACR name `dscfleet<suffix>acr` | `dsc` |
+| `displayName` | `setup-entra.ps1` | `DSC Fleet Dashboard` |
+
+Any value can still be overridden at the CLI for one-off runs, e.g.
+`./azure/scripts/deploy.ps1 -RgName my-rg -SkipWhatIf`.
 
 ### Repos to fork & clone
 

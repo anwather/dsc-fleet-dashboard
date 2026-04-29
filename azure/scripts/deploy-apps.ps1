@@ -13,9 +13,10 @@
 
 [CmdletBinding()]
 param(
-    [string] $SubscriptionId = '01e2f327-74ac-451e-8ad9-1f923a06d634',
-    [string] $Location       = 'australiaeast',
-    [string] $RgName         = 'dsc-fleet-dashboard',
+    [string] $SubscriptionId,
+    [string] $Location,
+    [string] $RgName,
+    [string] $NameSuffix,
     [string] $Tag            = 'latest',
     [string] $DeploymentName = ('apps-{0:yyyyMMdd-HHmmss}' -f (Get-Date)),
     [switch] $WhatIfOnly,
@@ -25,6 +26,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $env:PYTHONIOENCODING = 'utf-8'
+
+. (Join-Path $PSScriptRoot '_load-params.ps1')
+$p = Get-DeploymentParams
+if (-not $SubscriptionId) { $SubscriptionId = $p.subscriptionId }
+if (-not $Location)       { $Location       = $p.location }
+if (-not $RgName)         { $RgName         = $p.rgName }
+if (-not $NameSuffix)     { $NameSuffix     = $p.nameSuffix }
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $bicep = Join-Path $repoRoot 'azure\bicep\main.bicep'

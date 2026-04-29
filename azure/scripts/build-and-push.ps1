@@ -12,8 +12,8 @@
 
 [CmdletBinding()]
 param(
-    [string] $SubscriptionId = '01e2f327-74ac-451e-8ad9-1f923a06d634',
-    [string] $RegistryName   = 'dscfleetdscacr',
+    [string] $SubscriptionId,
+    [string] $RegistryName,
     [ValidateSet('all', 'api', 'web')]
     [string] $Only = 'all',
     [string] $Tag  = '',
@@ -22,6 +22,12 @@ param(
     [string] $EntraTenantId = '',
     [string] $EntraClientId = ''
 )
+
+. (Join-Path $PSScriptRoot '_load-params.ps1')
+$p = Get-DeploymentParams
+if (-not $SubscriptionId) { $SubscriptionId = $p.subscriptionId }
+# ACR name pattern: matches azure/bicep/main.bicep -> 'dscfleet${nameSuffix}acr'
+if (-not $RegistryName)   { $RegistryName   = ('dscfleet{0}acr' -f $p.nameSuffix).ToLowerInvariant() }
 
 $ErrorActionPreference = 'Stop'
 # `az acr build` streams build logs to stdout. The Azure CLI uses cp1252 on

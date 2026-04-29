@@ -33,6 +33,11 @@ cd C:\Source\dsc-fleet-dashboard
 az login
 az account set --subscription <your-sub-id>
 
+# 1. Copy the parameters template and edit it for your environment
+Copy-Item azure/parameters.example.jsonc azure/parameters.json
+notepad azure/parameters.json   # set subscriptionId, location, rgName, labRgName, nameSuffix, displayName
+
+# 2. Run the four scripts in order — they auto-load azure/parameters.json
 ./azure/scripts/deploy.ps1           # 1. Bicep infra (RG, ACR, UAMI, ACA env, storage)
 ./azure/scripts/setup-entra.ps1      # 2. Entra app reg (auto-pulls web FQDN from Bicep outputs)
 ./azure/scripts/build-and-push.ps1   # 3. az acr build api + web images
