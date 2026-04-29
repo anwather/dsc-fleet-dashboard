@@ -30,6 +30,7 @@ const route: FastifyPluginAsync = async (app) => {
         hadErrors: r.hadErrors,
         inDesiredState: r.inDesiredState,
         durationMs: r.durationMs,
+        dscOutput: r.dscOutput,
         startedAt: r.startedAt.toISOString(),
         finishedAt: r.finishedAt.toISOString(),
       })),

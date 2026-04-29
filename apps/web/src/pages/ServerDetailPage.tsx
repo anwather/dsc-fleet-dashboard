@@ -774,17 +774,40 @@ function RunsTab({ serverId }: { serverId: string }) {
       </div>
 
       <Dialog open={!!drawer} onOpenChange={(o) => !o && setDrawer(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-4xl">
           <DialogHeader>
             <DialogTitle>Run output — {drawer?.runId.slice(0, 8)}</DialogTitle>
           </DialogHeader>
-          <pre className="text-xs font-mono bg-muted p-3 rounded max-h-[60vh] overflow-auto">
-            {drawer ? JSON.stringify(drawer.dscOutput ?? {}, null, 2) : ''}
+          <pre className="text-xs font-mono bg-muted p-3 rounded max-h-[60vh] overflow-auto whitespace-pre-wrap break-words">
+            {drawer ? formatRunOutput(drawer.dscOutput) : ''}
           </pre>
         </DialogContent>
       </Dialog>
     </>
   );
+}
+
+/**
+ * The agent posts dscOutput as `{ raw: "<dsc stdout>" }` where the stdout
+ * is itself a JSON document from `dsc config set --output-format json`.
+ * Render it as plain text (pretty-printed if it parses as JSON, otherwise
+ * the raw stream) so operators can actually read it.
+ */
+function formatRunOutput(o: unknown): string {
+  if (o == null) return '(no output captured)';
+  if (typeof o === 'object' && o !== null && 'raw' in o) {
+    const raw = (o as { raw: unknown }).raw;
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim();
+      if (trimmed.length === 0) return '(empty stdout)';
+      try {
+        return JSON.stringify(JSON.parse(trimmed), null, 2);
+      } catch {
+        return raw;
+      }
+    }
+  }
+  return JSON.stringify(o, null, 2);
 }
 
 function ModulesTab({ serverId }: { serverId: string }) {
