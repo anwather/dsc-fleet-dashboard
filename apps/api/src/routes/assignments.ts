@@ -87,8 +87,13 @@ const route: FastifyPluginAsync = async (app) => {
         orderBy: { createdAt: 'desc' },
         include: {
           server: { select: { name: true } },
-          config: { select: { name: true, currentRevision: { select: { version: true } } } },
-          pinnedRevision: { select: { version: true } },
+          config: {
+            select: {
+              name: true,
+              currentRevision: { select: { version: true, requiredModules: true } },
+            },
+          },
+          pinnedRevision: { select: { version: true, requiredModules: true } },
         },
       });
       // Resolve the most recent run result per assignment in a single query so
@@ -116,6 +121,14 @@ const route: FastifyPluginAsync = async (app) => {
             a.pinnedRevision?.version ?? a.config?.currentRevision?.version ?? null,
           latestRevisionVersion: a.config?.currentRevision?.version ?? null,
           lastRunRevisionVersion: lastRunByAssignment.get(a.id) ?? null,
+          // The SPA's PrereqsTab needs requiredModules to compute the
+          // "missing modules" list. Use the pinned revision's modules when
+          // pinned (that's the revision the agent will actually run), otherwise
+          // fall back to the config's current revision.
+          requiredModules:
+            (a.pinnedRevision?.requiredModules as unknown) ??
+            (a.config?.currentRevision?.requiredModules as unknown) ??
+            [],
         })),
       );
     },
