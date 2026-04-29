@@ -140,6 +140,12 @@ const INSTALL_DSC_URL =
   'https://raw.githubusercontent.com/anwather/dsc-fleet/main/bootstrap/Install-DscV3.ps1';
 const REGISTER_AGENT_URL =
   'https://raw.githubusercontent.com/anwather/dsc-fleet/main/bootstrap/Register-DashboardAgent.ps1';
+// Shared logging module imported by every bootstrap script. MUST land on
+// disk before any of the script invocations run, otherwise their
+// `Import-Module DscFleet.Logging.psm1` falls back to host-only logging
+// and we lose the unified agent.log we're trying to build.
+const LOGGING_MODULE_URL =
+  'https://raw.githubusercontent.com/anwather/dsc-fleet/main/bootstrap/DscFleet.Logging.psm1';
 
 function buildProvisionScript(payload: JobPayloadProvision): string {
   // Single PowerShell script run on the VM via Azure Run-Command. We download
@@ -158,6 +164,7 @@ function buildProvisionScript(payload: JobPayloadProvision): string {
     "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12",
     "$bootstrapDir = 'C:\\ProgramData\\DscV3\\bootstrap'",
     'if (-not (Test-Path -LiteralPath $bootstrapDir)) { New-Item -ItemType Directory -Path $bootstrapDir -Force | Out-Null }',
+    `iwr -UseBasicParsing -Uri '${LOGGING_MODULE_URL}'    -OutFile (Join-Path $bootstrapDir 'DscFleet.Logging.psm1')`,
     `iwr -UseBasicParsing -Uri '${PREREQ_BOOTSTRAP_URL}' -OutFile (Join-Path $bootstrapDir 'Install-Prerequisites.ps1')`,
     `iwr -UseBasicParsing -Uri '${INSTALL_DSC_URL}'        -OutFile (Join-Path $bootstrapDir 'Install-DscV3.ps1')`,
     `iwr -UseBasicParsing -Uri '${REGISTER_AGENT_URL}'     -OutFile (Join-Path $bootstrapDir 'Register-DashboardAgent.ps1')`,

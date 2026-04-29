@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { Server, FileCode2, Grid3x3, ListChecks } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
+import { UserMenu } from '../auth/UserMenu';
 import { cn } from '@/lib/utils';
 
 const items = [
@@ -40,7 +41,8 @@ export function TopNav() {
             </NavLink>
           ))}
         </nav>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-3">
+          <UserMenu />
           <ThemeToggle />
         </div>
       </div>

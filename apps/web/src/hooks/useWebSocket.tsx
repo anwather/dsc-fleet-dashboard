@@ -19,6 +19,7 @@ import {
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { WsEvent } from '@dsc-fleet/shared-types';
+import { getApiAccessToken } from '@/lib/authToken';
 
 type Handler = (ev: WsEvent) => void;
 
@@ -29,11 +30,11 @@ interface WsApi {
 
 const WsCtx = createContext<WsApi | null>(null);
 
-function buildWsUrl(): string {
+function buildWsUrl(token: string): string {
   const explicit = import.meta.env.VITE_WS_PATH;
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const path = explicit ?? '/ws';
-  return `${proto}//${window.location.host}${path}`;
+  return `${proto}//${window.location.host}${path}?access_token=${encodeURIComponent(token)}`;
 }
 
 export function WsTopicsRoot({ children }: PropsWithChildren) {
@@ -53,57 +54,70 @@ export function WsTopicsRoot({ children }: PropsWithChildren) {
 
   const connect = useCallback(() => {
     if (closedByUserRef.current) return;
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(buildWsUrl());
-    } catch (e) {
-      console.warn('ws ctor failed', e);
-      scheduleReconnect();
-      return;
-    }
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      reconnectAttemptRef.current = 0;
-      // Re-subscribe to all topics with active handlers.
-      for (const topic of handlersRef.current.keys()) {
-        sendRaw({ action: 'subscribe', topic });
-      }
-      // Invalidate every active query — refetch fresh state.
-      queryClient.invalidateQueries();
-    };
-
-    ws.onmessage = (e) => {
-      let ev: WsEvent;
-      try {
-        ev = JSON.parse(typeof e.data === 'string' ? e.data : '');
-      } catch {
-        return;
-      }
-      const set = handlersRef.current.get(ev.topic);
-      if (set) {
-        for (const h of set) {
-          try {
-            h(ev);
-          } catch (err) {
-            console.warn('ws handler error', err);
-          }
+    // Acquire fresh token, then open the socket. If acquisition fails or
+    // triggers a redirect, just bail — auth state will resolve and the next
+    // attempt will succeed.
+    getApiAccessToken()
+      .then((token) => {
+        if (closedByUserRef.current) return;
+        let ws: WebSocket;
+        try {
+          ws = new WebSocket(buildWsUrl(token));
+        } catch (e) {
+          console.warn('ws ctor failed', e);
+          scheduleReconnect();
+          return;
         }
-      }
-      // Wildcard handlers — registered against literal topic "*"
-      const wildcards = handlersRef.current.get('*');
-      if (wildcards) {
-        for (const h of wildcards) h(ev);
-      }
-    };
+        wsRef.current = ws;
 
-    ws.onclose = () => {
-      wsRef.current = null;
-      scheduleReconnect();
-    };
-    ws.onerror = () => {
-      // onclose will follow.
-    };
+        ws.onopen = () => {
+          reconnectAttemptRef.current = 0;
+          for (const topic of handlersRef.current.keys()) {
+            sendRaw({ action: 'subscribe', topic });
+          }
+          queryClient.invalidateQueries();
+        };
+
+        ws.onmessage = (e) => {
+          let ev: WsEvent;
+          try {
+            ev = JSON.parse(typeof e.data === 'string' ? e.data : '');
+          } catch {
+            return;
+          }
+          const set = handlersRef.current.get(ev.topic);
+          if (set) {
+            for (const h of set) {
+              try {
+                h(ev);
+              } catch (err) {
+                console.warn('ws handler error', err);
+              }
+            }
+          }
+          const wildcards = handlersRef.current.get('*');
+          if (wildcards) {
+            for (const h of wildcards) h(ev);
+          }
+        };
+
+        ws.onclose = (ev) => {
+          wsRef.current = null;
+          // 4401 = our custom "auth failed" close. Force a fresh token on
+          // the next attempt by relying on getApiAccessToken's silent path.
+          if (ev.code === 4401) {
+            console.warn('ws closed: auth rejected, will reacquire token');
+          }
+          scheduleReconnect();
+        };
+        ws.onerror = () => {
+          // onclose follows.
+        };
+      })
+      .catch((err) => {
+        console.warn('ws token acquisition failed', err);
+        scheduleReconnect();
+      });
   }, [queryClient, sendRaw]);
 
   const scheduleReconnect = useCallback(() => {

@@ -53,6 +53,12 @@ param pgPassword string = ''
 @secure()
 param runAsMasterKey string = ''
 
+@description('Entra (Azure AD) tenant ID for dashboard auth. Required when deployApps=true.')
+param entraTenantId string = ''
+
+@description('Entra app registration client ID (also the API audience). Required when deployApps=true.')
+param entraApiClientId string = ''
+
 @description('Short name token used as a suffix to keep names globally unique-ish (ACR, storage).')
 @minLength(2)
 @maxLength(8)
@@ -175,6 +181,8 @@ module apps 'modules/apps.bicep' = if (deployApps) {
     postgresMode: postgresMode
     managedPgHost: postgresMode == 'managed' ? pg!.outputs.fqdn : ''
     managedPgUser: postgresMode == 'managed' ? pg!.outputs.adminUser : ''
+    entraTenantId: entraTenantId
+    entraApiClientId: entraApiClientId
   }
 }
 

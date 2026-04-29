@@ -15,6 +15,13 @@ const EnvSchema = z.object({
   AZURE_CLIENT_ID: z.string().optional().transform((v) => (v && v.length > 0 ? v : undefined)),
   AZURE_CLIENT_SECRET: z.string().optional().transform((v) => (v && v.length > 0 ? v : undefined)),
 
+  // Entra (Azure AD) auth for the dashboard. Both required to gate dashboard
+  // routes. When unset, the API will refuse to start so we never accidentally
+  // ship an unauthenticated dashboard.
+  ENTRA_TENANT_ID: z.string().min(1, 'ENTRA_TENANT_ID is required (Entra tenant GUID)'),
+  ENTRA_API_CLIENT_ID: z.string().min(1, 'ENTRA_API_CLIENT_ID is required (the Entra app registration client/app ID)'),
+  ENTRA_REQUIRED_SCOPE: z.string().min(1).default('access_as_user'),
+
   AGENT_POLL_DEFAULT_SECONDS: z.coerce.number().int().positive().default(60),
   OFFLINE_MULTIPLIER: z.coerce.number().int().positive().default(3),
   DEFAULT_ASSIGNMENT_INTERVAL_MINUTES: z.coerce.number().int().positive().default(15),

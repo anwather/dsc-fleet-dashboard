@@ -7,6 +7,7 @@
  *   "Backend incomplete" placeholders gracefully.
  */
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios';
+import { getApiAccessToken } from './authToken';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api';
 
@@ -14,6 +15,19 @@ export const http = axios.create({
   baseURL: API_BASE,
   timeout: 30_000,
   headers: { 'Content-Type': 'application/json' },
+});
+
+// Attach an Entra access token to every API call. Acquired silently from the
+// MSAL cache; falls back to a redirect if interaction is required.
+http.interceptors.request.use(async (config) => {
+  try {
+    const token = await getApiAccessToken();
+    config.headers = config.headers ?? {};
+    (config.headers as Record<string, string>).Authorization = `Bearer ${token}`;
+  } catch (err) {
+    console.warn('failed to acquire api access token', err);
+  }
+  return config;
 });
 
 export class ApiError extends Error {

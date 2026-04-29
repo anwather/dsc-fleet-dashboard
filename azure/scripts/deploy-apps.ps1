@@ -74,6 +74,10 @@ if ($RotateRunAsKey -or -not $secrets.runAsMasterKey) {
 $secrets | ConvertTo-Json | Set-Content -Path $secretsFile -Encoding UTF8
 Write-Host "Secrets saved to $secretsFile (gitignored)." -ForegroundColor DarkGray
 
+if (-not $secrets.entraTenantId -or -not $secrets.entraClientId) {
+    throw "Missing entraTenantId / entraClientId in $secretsFile. Run azure/scripts/setup-entra.ps1 first."
+}
+
 az account set --subscription $SubscriptionId | Out-Null
 
 $paramArgs = @(
@@ -82,7 +86,9 @@ $paramArgs = @(
     "deployApps=true",
     "imageTag=$Tag",
     "pgPassword=$($secrets.pgPassword)",
-    "runAsMasterKey=$($secrets.runAsMasterKey)"
+    "runAsMasterKey=$($secrets.runAsMasterKey)",
+    "entraTenantId=$($secrets.entraTenantId)",
+    "entraApiClientId=$($secrets.entraClientId)"
 )
 
 if (-not $SkipWhatIf) {

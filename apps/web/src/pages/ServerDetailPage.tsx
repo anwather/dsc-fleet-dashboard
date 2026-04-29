@@ -31,6 +31,7 @@ import {
 import { RelativeTime } from '@/components/RelativeTime';
 import { BackendIncomplete } from '@/components/BackendIncomplete';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { ReprovisionDialog, type ReprovisionDialogRunAs } from '@/components/ReprovisionDialog';
 import { RefreshButton } from '@/components/ui/RefreshButton';
 import { apiDelete, apiGet, apiPatch, apiPost, ApiError, softFetch } from '@/lib/api';
 import { useWsTopic } from '@/hooks/useWebSocket';
@@ -161,7 +162,7 @@ export function ServerDetailPage() {
         </TabsList>
 
         <TabsContent value="prereqs">
-          <PrereqsTab serverId={id} serverName={s.name} />
+          <PrereqsTab serverId={id} serverName={s.name} runAs={s.runAs} />
         </TabsContent>
         <TabsContent value="assignments">
           <AssignmentsTab serverId={id} />
@@ -213,9 +214,18 @@ export function ServerDetailPage() {
  *   • Re-run provisioning — POSTs /provision-token (the canonical route)
  *   • Install missing modules — POSTs /install-modules with the computed list
  */
-function PrereqsTab({ serverId, serverName }: { serverId: string; serverName: string }) {
+function PrereqsTab({
+  serverId,
+  serverName,
+  runAs,
+}: {
+  serverId: string;
+  serverName: string;
+  runAs?: ServerSummary['runAs'];
+}) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [reprovOpen, setReprovOpen] = useState(false);
 
   const jobs = useQuery<JobSummary[] | null>({
     queryKey: ['jobs', { serverId }],
@@ -234,6 +244,10 @@ function PrereqsTab({ serverId, serverName }: { serverId: string; serverName: st
       softFetch(() => apiGet<ServerModuleSummary[]>(`/servers/${serverId}/modules`)),
   });
 
+  // Empty-body POST is only used when the stored identity is SYSTEM (or
+  // unknown — back-compat fallback). For everything else we open the dialog
+  // and force the operator to confirm credentials, because the API would
+  // otherwise silently re-use whatever password it has on file.
   const reprovision = useMutation({
     mutationFn: () => apiPost<{ jobId: string }>(`/servers/${serverId}/provision-token`, {}),
     onSuccess: (r) => {
@@ -249,6 +263,19 @@ function PrereqsTab({ serverId, serverName }: { serverId: string; serverName: st
       toast({ title: 'Re-run failed', description: msg, variant: 'destructive' });
     },
   });
+
+  const dialogCurrentRunAs: ReprovisionDialogRunAs | undefined = runAs
+    ? { kind: runAs.kind, user: runAs.user }
+    : undefined;
+  const needsCredentialPrompt = (runAs?.kind ?? 'system') !== 'system';
+
+  function onReprovisionClick() {
+    if (needsCredentialPrompt) {
+      setReprovOpen(true);
+    } else {
+      reprovision.mutate();
+    }
+  }
 
   const installMissing = useMutation({
     mutationFn: (mods: { name: string; minVersion?: string }[]) =>
@@ -307,13 +334,25 @@ function PrereqsTab({ serverId, serverName }: { serverId: string; serverName: st
 
   return (
     <div className="space-y-6">
+      <ReprovisionDialog
+        open={reprovOpen}
+        onOpenChange={setReprovOpen}
+        serverId={serverId}
+        serverName={serverName}
+        currentRunAs={dialogCurrentRunAs}
+      />
       {/* Action header */}
       <div className="flex flex-wrap items-center gap-2">
         <Button
           size="sm"
           variant="outline"
-          onClick={() => reprovision.mutate()}
+          onClick={onReprovisionClick}
           disabled={reprovision.isPending}
+          title={
+            needsCredentialPrompt
+              ? `Confirm ${runAs?.kind} credentials before re-running provisioning.`
+              : 'Re-run provisioning as SYSTEM.'
+          }
         >
           <RotateCw className="h-4 w-4" />
           {reprovision.isPending ? 'Queuing…' : 'Re-run provisioning'}

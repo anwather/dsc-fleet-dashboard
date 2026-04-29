@@ -16,7 +16,11 @@ param(
     [string] $RegistryName   = 'dscfleetdscacr',
     [ValidateSet('all', 'api', 'web')]
     [string] $Only = 'all',
-    [string] $Tag  = ''
+    [string] $Tag  = '',
+    # Entra build args required by the web image. If omitted, will be read
+    # from .azure/secrets.local.json (populated by setup-entra.ps1).
+    [string] $EntraTenantId = '',
+    [string] $EntraClientId = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,31 +37,55 @@ try {
         $Tag = (& git rev-parse --short HEAD 2>$null)
         if ($LASTEXITCODE -ne 0 -or -not $Tag) { $Tag = 'latest' }
     }
+
+    # Resolve Entra build args from secrets.local.json if not passed.
+    if ($Only -in @('all','web')) {
+        if (-not $EntraTenantId -or -not $EntraClientId) {
+            $secretsFile = Join-Path $repoRoot '.azure\secrets.local.json'
+            if (Test-Path $secretsFile) {
+                $s = Get-Content $secretsFile -Raw | ConvertFrom-Json
+                if (-not $EntraTenantId) { $EntraTenantId = $s.entraTenantId }
+                if (-not $EntraClientId) { $EntraClientId = $s.entraClientId }
+            }
+        }
+        if (-not $EntraTenantId -or -not $EntraClientId) {
+            throw "Web build requires -EntraTenantId and -EntraClientId (or run azure/scripts/setup-entra.ps1 to populate secrets.local.json)."
+        }
+    }
+
     Write-Host "Repo root:     $repoRoot" -ForegroundColor DarkGray
     Write-Host "Subscription:  $SubscriptionId" -ForegroundColor DarkGray
     Write-Host "Registry:      $RegistryName" -ForegroundColor DarkGray
     Write-Host "Tag:           $Tag" -ForegroundColor DarkGray
     Write-Host "Targets:       $Only" -ForegroundColor DarkGray
+    if ($Only -in @('all','web')) {
+        Write-Host ("Entra tenant:  {0}" -f $EntraTenantId) -ForegroundColor DarkGray
+        Write-Host ("Entra client:  {0}" -f $EntraClientId) -ForegroundColor DarkGray
+    }
 
     az account set --subscription $SubscriptionId | Out-Null
 
     function Build-Image {
-        param([string] $Image, [string] $Dockerfile)
+        param(
+            [string] $Image,
+            [string] $Dockerfile,
+            [string[]] $BuildArgs = @()
+        )
         $ref = "$Image`:$Tag"
         $latest = "$Image`:latest"
         Write-Host "`n=== az acr build $ref (+ $latest) ===" -ForegroundColor Cyan
-        # Two -t flags = both tags pushed in a single build.
-        az acr build `
-            --registry $RegistryName `
-            --image $ref `
-            --image $latest `
-            --file $Dockerfile `
-            .
+        $cmd = @(
+            'acr','build',
+            '--registry', $RegistryName,
+            '--image', $ref,
+            '--image', $latest,
+            '--file', $Dockerfile
+        )
+        foreach ($ba in $BuildArgs) { $cmd += @('--build-arg', $ba) }
+        $cmd += '.'
+        & az @cmd
         $azExit = $LASTEXITCODE
         if ($azExit -ne 0) {
-            # `az acr build` streams logs and may exit non-zero because of
-            # a Unicode-encoding crash in the Python log streamer even when
-            # the actual ACR run succeeded. Poll the run status until terminal.
             $runId = az acr task list-runs --registry $RegistryName --top 1 --query '[0].runId' -o tsv
             Write-Host "  (az CLI exited $azExit; polling ACR run $runId)" -ForegroundColor DarkGray
             do {
@@ -74,7 +102,12 @@ try {
     }
 
     if ($Only -in @('all','api')) { Build-Image -Image 'dsc-fleet/api' -Dockerfile 'apps/api/Dockerfile' }
-    if ($Only -in @('all','web')) { Build-Image -Image 'dsc-fleet/web' -Dockerfile 'apps/web/Dockerfile' }
+    if ($Only -in @('all','web')) {
+        Build-Image -Image 'dsc-fleet/web' -Dockerfile 'apps/web/Dockerfile' -BuildArgs @(
+            "VITE_ENTRA_TENANT_ID=$EntraTenantId",
+            "VITE_ENTRA_CLIENT_ID=$EntraClientId"
+        )
+    }
 
     Write-Host "`n=== Repository contents ===" -ForegroundColor Green
     az acr repository list --name $RegistryName -o tsv | Sort-Object | ForEach-Object {

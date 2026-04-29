@@ -1,18 +1,22 @@
 /**
  * WebSocket plugin — topic-based broadcast.
  *
- * Clients connect to /ws and send JSON frames:
+ * Clients connect to /ws?access_token=<entra-jwt> and send JSON frames:
  *   {"action":"subscribe","topic":"job:<id>"}
  *   {"action":"unsubscribe","topic":"server:<id>"}
  *
  * Server-side code calls `app.broadcast(topic, type, payload)` to push events
  * to every subscriber of `topic`. Persisted state in the DB remains the
  * source of truth — WS messages are an optimisation, not authoritative.
+ *
+ * Entra auth: the access_token query param is validated on connect. On
+ * failure we close the socket with code 4401 (custom-application range).
  */
 import fp from 'fastify-plugin';
 import websocketPlugin, { type WebSocket } from '@fastify/websocket';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { logger } from '../lib/logger.js';
+import { verifyEntraJwt } from '../lib/entraAuth.js';
 import type { WsEvent } from '@dsc-fleet/shared-types';
 
 interface ClientState {
@@ -70,7 +74,28 @@ const wsPlugin: FastifyPluginAsync = async (app) => {
     }
   });
 
-  app.get('/ws', { websocket: true }, (socket /* WebSocket */, req) => {
+  app.get(
+    '/ws',
+    {
+      websocket: true,
+      // Validate the Entra access token before the WebSocket upgrade. We use
+      // an onRequest hook (not preHandler) because @fastify/websocket short-
+      // circuits other lifecycle hooks for upgrade requests on some versions.
+      onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+        const q = req.query as { access_token?: string };
+        const token = typeof q?.access_token === 'string' ? q.access_token.trim() : '';
+        if (!token) {
+          return reply.status(401).send({ error: 'Unauthorized', message: 'access_token required' });
+        }
+        try {
+          await verifyEntraJwt(token);
+        } catch (err) {
+          req.log.debug({ err: (err as Error).message }, 'ws entra token rejected');
+          return reply.status(401).send({ error: 'Unauthorized', message: 'Invalid token' });
+        }
+      },
+    },
+    (socket /* WebSocket */, req) => {
     const client: ClientState = { socket, topics: new Set() };
     clients.add(client);
     req.log.debug({ remote: req.ip }, 'ws client connected');

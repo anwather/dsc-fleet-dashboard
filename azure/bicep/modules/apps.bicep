@@ -67,6 +67,12 @@ param managedPgHost string = ''
 @description('When postgresMode=managed, the admin user.')
 param managedPgUser string = ''
 
+@description('Entra (Azure AD) tenant ID for dashboard auth.')
+param entraTenantId string
+
+@description('Entra app registration client ID (also the API audience).')
+param entraApiClientId string
+
 // -----------------------------------------------------------------------------
 // Computed FQDNs (ACA assigns deterministic names)
 // -----------------------------------------------------------------------------
@@ -219,6 +225,8 @@ resource api 'Microsoft.App/containerApps@2024-10-02-preview' = {
             // DefaultAzureCredential needs the client id when multiple
             // managed identities could be attached, so be explicit.
             { name: 'AZURE_CLIENT_ID', value: identityClientId }
+            { name: 'ENTRA_TENANT_ID', value: entraTenantId }
+            { name: 'ENTRA_API_CLIENT_ID', value: entraApiClientId }
           ]
           probes: [
             {

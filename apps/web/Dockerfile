@@ -16,6 +16,12 @@ RUN npm ci --include=dev
 COPY packages/shared-types packages/shared-types
 COPY apps/web apps/web
 
+# Entra build args — baked into the SPA at Vite build time. Both required.
+ARG VITE_ENTRA_TENANT_ID
+ARG VITE_ENTRA_CLIENT_ID
+ENV VITE_ENTRA_TENANT_ID=${VITE_ENTRA_TENANT_ID}
+ENV VITE_ENTRA_CLIENT_ID=${VITE_ENTRA_CLIENT_ID}
+
 # Build shared-types first, then the web app.
 RUN npm -w @dsc-fleet/shared-types run build \
  && npm -w @dsc-fleet/web run build

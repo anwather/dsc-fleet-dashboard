@@ -25,6 +25,7 @@ import { bindJobsApp } from './services/jobs.js';
 import errorHandlerPlugin from './plugins/errorHandler.js';
 import auditPlugin from './plugins/audit.js';
 import websocketPlugin from './plugins/websocket.js';
+import entraAuthPlugin from './plugins/entraAuth.js';
 
 import healthRoutes from './routes/health.js';
 import serversRoutes from './routes/servers.js';
@@ -49,15 +50,28 @@ async function buildApp() {
 
   await app.register(errorHandlerPlugin);
   await app.register(auditPlugin);
+  await app.register(entraAuthPlugin);
   await app.register(websocketPlugin);
 
+  // Anonymous: health probes.
   await app.register(healthRoutes);
-  await app.register(serversRoutes,     { prefix: '/api/servers' });
-  await app.register(configsRoutes,     { prefix: '/api/configs' });
-  await app.register(assignmentsRoutes, { prefix: '/api/assignments' });
-  await app.register(jobsRoutes,        { prefix: '/api/jobs' });
-  await app.register(runResultsRoutes,  { prefix: '/api/run-results' });
-  await app.register(auditEventsRoutes, { prefix: '/api/audit-events' });
+
+  // Entra-protected dashboard routes (browser/human traffic).
+  // NOTE: Fastify `register()` does NOT accept `preHandler` as a register
+  // option — hooks must be installed via addHook inside an encapsulated
+  // scope. Wrap the protected routes in a child plugin that registers
+  // the preHandler hook for everything inside it.
+  await app.register(async (protectedScope) => {
+    protectedScope.addHook('preHandler', app.entraPreHandler);
+    await protectedScope.register(serversRoutes,     { prefix: '/api/servers' });
+    await protectedScope.register(configsRoutes,     { prefix: '/api/configs' });
+    await protectedScope.register(assignmentsRoutes, { prefix: '/api/assignments' });
+    await protectedScope.register(jobsRoutes,        { prefix: '/api/jobs' });
+    await protectedScope.register(runResultsRoutes,  { prefix: '/api/run-results' });
+    await protectedScope.register(auditEventsRoutes, { prefix: '/api/audit-events' });
+  });
+
+  // Agent + RunAs: their own bearer-key / URL-token auth, no Entra.
   await app.register(agentsRoutes,      { prefix: '/api/agents' });
 
   return { app, env };
