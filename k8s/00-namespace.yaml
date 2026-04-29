@@ -1,6 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: dsc-fleet
-  labels:
-    app.kubernetes.io/name: dsc-fleet-dashboard

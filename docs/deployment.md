@@ -131,48 +131,30 @@ re-register reused agents" below).
 
 ---
 
-## Mandatory phase order
+## Phase order at a glance
 
-The Entra app registration's SPA redirect URI depends on the ACA environment's
-`defaultDomain`, which only exists once the infra is deployed. To avoid a
-"chicken-and-egg" failure on a clean redeploy, Phase 1 is **split** and
-interleaved with Phase 2:
+Run the four scripts under `azure/scripts/` in this exact order. Each one
+depends on artefacts produced by the previous, so don't reorder or skip:
 
-1. **Phase 1a** — plan the app registration (name + tenant). No action yet.
-2. **Phase 2** — deploy Bicep infra (`deployApps=false`). Capture
-   `containerAppsEnvironmentDefaultDomain` from the outputs.
-3. **Phase 1b** — run `setup-entra.ps1 -WebUrl https://web.<defaultDomain>`
-   to create the app registration with the correct SPA redirect URI.
-4. **Phase 3** — build & push the web image (it bakes in
-   `VITE_ENTRA_TENANT_ID` / `VITE_ENTRA_CLIENT_ID` from 1b).
-5. **Phase 4** — deploy the Container Apps (`deployApps=true`).
-6. **Phases 5–8** — DB init, agent provisioning, lab module deploy, smoke test.
+| # | Script | Purpose | Why this order |
+|---|---|---|---|
+| 1 | `deploy.ps1` | Bicep infra (RG, ACR, UAMI, ACA env, Postgres flex server, storage) | Produces the ACA env `defaultDomain` that Phase 2 needs for the SPA redirect URI; persists `webUrl` to `.azure/secrets.local.json`. |
+| 2 | `setup-entra.ps1` | Entra app registration (SPA + Expose API + scope) | Auto-reads the deployed web URL from `.azure/secrets.local.json`; persists `entraTenantId` + `entraClientId` for Phase 3. |
+| 3 | `build-and-push.ps1` | `az acr build` for `api` and `web` images | Web image **bakes in** `VITE_ENTRA_TENANT_ID` / `VITE_ENTRA_CLIENT_ID` at Vite build time, so Entra must exist first. |
+| 4 | `deploy-apps.ps1` | Container Apps (api + web), Postgres password, runas master key, env wiring | Wires the two image digests + Entra IDs + Postgres connection string into the running Container Apps. |
+
+Then Phases 5–8 (DB init, agent provisioning, lab module deploy, smoke test).
 
 This matches the quickstart sequence in [`../azure/README.md`](../azure/README.md#quickstart-deploy).
 
----
-
-## Phase 1a — Plan the Entra app registration
-
-The web SPA + API share **one** app registration with two platforms (SPA + Expose API). See `azure/ENTRA-AUTH.md` for the full design notes.
-
-There is **nothing to run in Phase 1a** — the actual `setup-entra.ps1` invocation
-is deferred to Phase 1b (after Phase 2), because its `-WebUrl` argument depends
-on the ACA environment `defaultDomain` produced by the Phase 2 Bicep deploy.
-
-In Phase 1a, just decide:
-
-- **Display name** for the app registration (default: `DSC Fleet Dashboard`).
-- **Tenant** — must match the subscription you're deploying into; cross-tenant
-  is not supported by `entraAuth.ts`.
-- Whether you have **Application Administrator** (or Cloud Application
-  Administrator) — if not, the script will print manual portal fallback steps.
-
-> ⚠️ The web Vite bundle **bakes in** `VITE_ENTRA_TENANT_ID` and `VITE_ENTRA_CLIENT_ID` at build time. Any change to these (including running Phase 1b for the first time) requires rebuilding the web image (Phase 3) before Phase 4.
+> ⚠️ **Web bundle is baked at build time.** The `VITE_ENTRA_TENANT_ID` /
+> `VITE_ENTRA_CLIENT_ID` values are baked into the SPA bundle in Phase 3.
+> If you ever change them (re-create the Entra app reg, switch tenants),
+> you **must** rebuild the web image (Phase 3) and roll out (Phase 4) again.
 
 ---
 
-## Phase 2 — Bicep infrastructure deploy
+## Phase 1 — Bicep infrastructure deploy
 
 Subscription-scope template at `azure/bicep/main.bicep` creates everything **except** the three Container Apps (those land in Phase 4).
 
@@ -209,20 +191,21 @@ az deployment sub create `
               labRgName=dsc-v3 nameSuffix=dsc assignVmContributor=true
 ```
 
-On success the script prints all outputs — capture `containerAppsEnvironmentDefaultDomain` for Phase 1b / 4.
+On success the script prints all outputs **and** persists `webUrl`,
+`apiUrl`, `acaDefaultDomain`, ACR + UAMI details to `.azure/secrets.local.json`
+so the rest of the chain is self-contained.
 
 ---
 
-## Phase 1b — Create the Entra app registration
+## Phase 2 — Create the Entra app registration
 
-Now that Phase 2 has produced a stable ACA env `defaultDomain`, register the
-SPA redirect URI against the real web FQDN. Substitute the
-`containerAppsEnvironmentDefaultDomain` output captured above:
+The SPA redirect URI is the deployed web URL produced by Phase 1. The
+script picks it up automatically from `.azure/secrets.local.json`, so a
+fresh deploy is a single command:
 
 ```powershell
-./azure/scripts/setup-entra.ps1 `
-    -DisplayName 'DSC Fleet Dashboard' `
-    -WebUrl      "https://web.<containerAppsEnvironmentDefaultDomain>"
+./azure/scripts/setup-entra.ps1
+# or override: ./azure/scripts/setup-entra.ps1 -WebUrl https://web.example.com
 ```
 
 This will:
@@ -233,22 +216,24 @@ This will:
 4. Add Microsoft Graph `User.Read` delegated permission and attempt admin consent (silently skipped if you lack the role — users will consent on first sign-in).
 5. Persist `entraTenantId` + `entraClientId` to `.azure/secrets.local.json` (gitignored).
 
-### 1b.1 Manual portal fallback
+### 2.1 Manual portal fallback
 
-If the script prints “Cannot create the app registration via az CLI”, follow its printed steps. The minimum required state is documented at `azure/ENTRA-AUTH.md` § *Manual portal fallback*. After creating manually, write to `.azure/secrets.local.json`:
+If the script prints "Cannot create the app registration via az CLI", follow its printed steps. The minimum required state is documented at `docs/entra-setup.md`. After creating manually, write to `.azure/secrets.local.json`:
 
 ```json
 { "entraTenantId": "<tenant-guid>", "entraClientId": "<app-guid>" }
 ```
 
-### 1b.2 If the web URL later changes (re-deploy / new env)
+### 2.2 If the web URL later changes (re-deploy / new env)
 
 The web FQDN is derived from the ACA env's `defaultDomain`. If you re-create
 the env (e.g. after a teardown), the `defaultDomain` will change and the
-existing redirect URI will stop matching. Re-run:
+existing redirect URI will stop matching. Re-run Phase 1 (which refreshes
+`webUrl` in `secrets.local.json`) and then Phase 2:
 
 ```powershell
-./azure/scripts/setup-entra.ps1 -WebUrl "https://web.<newDefaultDomain>"
+./azure/scripts/deploy.ps1
+./azure/scripts/setup-entra.ps1
 ```
 
 then rebuild the web image (Phase 3) and roll out (Phase 4) so the SPA bundle
@@ -495,7 +480,7 @@ $web = 'https://' + (az containerapp show -g $rg -n web --query properties.confi
 "API: $api"; "Web: $web"
 ```
 
-API smoke (per `azure/ENTRA-AUTH.md`):
+API smoke (per `docs/entra-setup.md`):
 
 ```powershell
 curl.exe -i "$api/healthz"             # 200 (anonymous, by design)
@@ -764,7 +749,7 @@ If you skip step 2, `Register-DashboardAgent.ps1` will overwrite the API key fie
 DENIED: requested access to the resource is denied
 ```
 
-- The UAMI doesn't have **AcrPull** on the registry. Re-deploy Phase 2, or assign manually:
+- The UAMI doesn't have **AcrPull** on the registry. Re-deploy Phase 1, or assign manually:
   ```powershell
   $uami = az identity show -g dsc-fleet-dashboard -n id-dsc-fleet-dashboard --query principalId -o tsv
   $acr  = az acr show -g dsc-fleet-dashboard -n dscfleetdscacr --query id -o tsv

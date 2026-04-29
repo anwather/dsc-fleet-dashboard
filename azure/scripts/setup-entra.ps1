@@ -1,10 +1,13 @@
 # Create / update the Entra app registration that fronts the dashboard.
 #
 # - Single tenant
-# - SPA platform with redirect URIs for localhost dev + the deployed web URL
+# - SPA platform with one redirect URI: the deployed web URL
 # - Expose API: api://<clientId> with scope "access_as_user"
 # - Microsoft Graph User.Read delegated permission (for displaying the user's name)
 # - Persists clientId + tenantId to .azure/secrets.local.json
+#
+# Web URL is auto-detected from .azure/secrets.local.json (written by deploy.ps1).
+# Pass -WebUrl explicitly if you need to override.
 #
 # If the signed-in user lacks Application Administrator rights, the script
 # prints the manual portal steps and exits non-zero.
@@ -16,8 +19,8 @@
 [CmdletBinding()]
 param(
     [string] $DisplayName    = 'DSC Fleet Dashboard',
-    [string] $WebUrl         = 'https://web.mangopond-a279fde4.australiaeast.azurecontainerapps.io',
-    [string[]] $ExtraRedirects = @('http://localhost:5173', 'http://localhost:5173/')
+    [string] $WebUrl         = '',
+    [string[]] $ExtraRedirects = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,6 +29,18 @@ $repoRoot    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $secretsDir  = Join-Path $repoRoot '.azure'
 $secretsFile = Join-Path $secretsDir 'secrets.local.json'
 if (-not (Test-Path $secretsDir)) { New-Item -ItemType Directory -Path $secretsDir | Out-Null }
+
+if (-not $WebUrl) {
+    if (-not (Test-Path $secretsFile)) {
+        throw "WebUrl not provided and $secretsFile not found. Run azure/scripts/deploy.ps1 first (it writes the web URL), or pass -WebUrl explicitly."
+    }
+    $existing = Get-Content $secretsFile -Raw | ConvertFrom-Json -AsHashtable
+    $WebUrl = $existing.webUrl
+    if (-not $WebUrl) {
+        throw "secrets.local.json has no 'webUrl' key. Re-run azure/scripts/deploy.ps1 (it now persists the deployed web URL), or pass -WebUrl explicitly."
+    }
+    Write-Host "Using web URL from $($secretsFile): $WebUrl" -ForegroundColor DarkCyan
+}
 
 function Show-ManualSteps {
     param([string] $Reason)

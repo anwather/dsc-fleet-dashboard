@@ -94,4 +94,25 @@ Write-Host ("ACA env id:            {0}" -f $out.containerAppsEnvironmentId.valu
 Write-Host ("ACA env default domain:{0}" -f $out.containerAppsEnvironmentDefaultDomain.value)
 Write-Host ("Log Analytics ws id:   {0}" -f $out.logAnalyticsWorkspaceId.value)
 
-Write-Host "`nNext: Phase 2 (build + push images)." -ForegroundColor Cyan
+# Persist the web URL to .azure/secrets.local.json so setup-entra.ps1 can pick it up
+# without requiring the user to copy/paste the FQDN by hand.
+$repoRoot    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$secretsDir  = Join-Path $repoRoot '.azure'
+$secretsFile = Join-Path $secretsDir 'secrets.local.json'
+if (-not (Test-Path $secretsDir)) { New-Item -ItemType Directory -Path $secretsDir | Out-Null }
+$secrets = @{}
+if (Test-Path $secretsFile) {
+    $secrets = Get-Content $secretsFile -Raw | ConvertFrom-Json -AsHashtable
+}
+$defaultDomain = $out.containerAppsEnvironmentDefaultDomain.value
+$secrets.resourceGroup    = $out.resourceGroupName.value
+$secrets.acrLoginServer   = $out.acrLoginServer.value
+$secrets.acrName          = $out.acrName.value
+$secrets.identityClientId = $out.identityClientId.value
+$secrets.acaDefaultDomain = $defaultDomain
+$secrets.webUrl           = "https://web.$defaultDomain"
+$secrets.apiUrl           = "https://api.$defaultDomain"
+$secrets | ConvertTo-Json | Set-Content -Path $secretsFile -Encoding UTF8
+Write-Host ("Saved infra outputs:   {0}" -f $secretsFile)
+
+Write-Host "`nNext: ./azure/scripts/setup-entra.ps1 (web URL is auto-detected)." -ForegroundColor Cyan

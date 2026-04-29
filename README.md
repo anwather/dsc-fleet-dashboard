@@ -23,20 +23,26 @@ files are not maintained.
 ## Quickstart
 
 Follow [docs/deployment.md](docs/deployment.md) end-to-end. The
-high-level shape:
+high-level shape — **run the four scripts under `azure/scripts/` in
+this exact order**:
 
-1. Fork **`dsc-fleet-dashboard`** (this repo) and **`dsc-fleet`** (the
-   PowerShell agent) into your own GitHub org.
-2. `git clone` both forks to your workstation.
-3. From `dsc-fleet-dashboard`, run the scripts in `azure/scripts` in
-   order — `setup-entra.ps1` → `deploy.ps1` → `build-and-push.ps1` →
-   `deploy-apps.ps1` — to create the Entra app registration, deploy
-   the Azure infrastructure, build the api/web container images, and
-   start the Container Apps.
-4. From the dashboard UI, add your first VM. The api uses Azure
-   Run-Command to install DSC v3 + the agent on that VM.
-5. Author a config from a sample, assign it to the VM with an interval,
-   and watch the run history populate.
+```powershell
+# 0. (one-off) fork dsc-fleet-dashboard + dsc-fleet on github.com,
+#    then clone both forks side-by-side under C:\Source\.
+cd C:\Source\dsc-fleet-dashboard
+az login
+az account set --subscription <your-sub-id>
+
+./azure/scripts/deploy.ps1           # 1. Bicep infra (RG, ACR, UAMI, ACA env, storage)
+./azure/scripts/setup-entra.ps1      # 2. Entra app reg (auto-pulls web FQDN from Bicep outputs)
+./azure/scripts/build-and-push.ps1   # 3. az acr build api + web images
+./azure/scripts/deploy-apps.ps1      # 4. Container Apps + Postgres Flexible Server
+```
+
+Then from the dashboard UI: add your first VM (the api uses Azure
+Run-Command to install DSC v3 + the agent), author a config from a
+sample, assign it to the VM with an interval, and watch the run
+history populate.
 
 The full prerequisites list (Azure CLI, PowerShell 7, an Owner-rights
 account, an Entra app-registration role) and the teardown / redeploy
@@ -77,12 +83,6 @@ The full doc set lives in [`docs/`](docs/). Start with:
 | [`packages/shared-types`](packages/shared-types) | TypeScript types shared between api and web (assignment, run-result, audit, ws-event). |
 | [`azure`](azure) | Bicep templates and PowerShell scripts for the Container Apps deployment. The supported deploy target. |
 | [`docs`](docs) | This documentation. |
-
-> The `k8s/`, `scripts/deploy-minikube.*`, `docker-compose.yml`, and
-> `.env.example` files in this repo are **legacy** local-dev artefacts
-> from earlier iterations. They are not maintained, not documented,
-> and not used by the Azure deployment path. Treat them as candidates
-> for deletion in your fork.
 
 ## Companion repositories
 

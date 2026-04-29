@@ -1,0 +1,1500 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "languageVersion": "2.0",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.41.2.15936",
+      "templateHash": "7676075765414716523"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "australiaeast",
+      "metadata": {
+        "description": "Azure region for all resources. Pinned to lab region."
+      }
+    },
+    "rgName": {
+      "type": "string",
+      "defaultValue": "dsc-fleet-dashboard",
+      "metadata": {
+        "description": "Resource group that will hold the dashboard."
+      }
+    },
+    "labRgName": {
+      "type": "string",
+      "defaultValue": "dsc-v3",
+      "metadata": {
+        "description": "Lab resource group containing the Windows Server VMs the dashboard manages."
+      }
+    },
+    "assignVmContributor": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Whether to assign Virtual Machine Contributor on the lab RG to the UAMI. Set to false if the deploying principal does not have role-assignment rights on the lab RG; you can do that step manually later."
+      }
+    },
+    "deployApps": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Whether to deploy the three Container Apps (postgres, api, web). Set to false to keep the deployment to infra only."
+      }
+    },
+    "imageTag": {
+      "type": "string",
+      "defaultValue": "latest",
+      "metadata": {
+        "description": "Container image tag (matches what was pushed to ACR by build-and-push.ps1)."
+      }
+    },
+    "postgresMode": {
+      "type": "string",
+      "defaultValue": "managed",
+      "allowedValues": [
+        "container",
+        "managed"
+      ],
+      "metadata": {
+        "description": "Postgres backend mode. \"container\" runs an in-env postgres container with Azure Files (NOT recommended — chmod fails on SMB). \"managed\" provisions Azure Database for PostgreSQL Flexible Server B1ms."
+      }
+    },
+    "pgPassword": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Postgres password. Required when deployApps=true. For \"managed\" mode this is the flex-server admin password and the api app DATABASE_URL."
+      }
+    },
+    "runAsMasterKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "RUNAS_MASTER_KEY for AES-256-GCM encryption of password run-as creds. 32 bytes base64. Empty disables password run-as in the UI."
+      }
+    },
+    "entraTenantId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Entra (Azure AD) tenant ID for dashboard auth. Required when deployApps=true."
+      }
+    },
+    "entraApiClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Entra app registration client ID (also the API audience). Required when deployApps=true."
+      }
+    },
+    "nameSuffix": {
+      "type": "string",
+      "defaultValue": "dsc",
+      "minLength": 2,
+      "maxLength": 8,
+      "metadata": {
+        "description": "Short name token used as a suffix to keep names globally unique-ish (ACR, storage)."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {
+        "app": "dsc-fleet-dashboard",
+        "env": "shared",
+        "managedBy": "bicep"
+      },
+      "metadata": {
+        "description": "Tags applied to every resource."
+      }
+    }
+  },
+  "resources": {
+    "rg": {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "[parameters('rgName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]"
+    },
+    "la": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "log-analytics",
+      "resourceGroup": "[parameters('rgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "workspaceName": {
+            "value": "[format('log-{0}', parameters('rgName'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "8826896528087202914"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Region."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Tags."
+              }
+            },
+            "workspaceName": {
+              "type": "string",
+              "metadata": {
+                "description": "Workspace name."
+              }
+            }
+          },
+          "resources": {
+            "ws": {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2023-09-01",
+              "name": "[parameters('workspaceName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "sku": {
+                  "name": "PerGB2018"
+                },
+                "retentionInDays": 30,
+                "workspaceCapping": {
+                  "dailyQuotaGb": 1
+                },
+                "features": {
+                  "enableLogAccessUsingOnlyResourcePermissions": true
+                }
+              }
+            }
+          },
+          "outputs": {
+            "workspaceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+            },
+            "customerId": {
+              "type": "string",
+              "value": "[reference('ws').customerId]"
+            },
+            "primarySharedKey": {
+              "type": "securestring",
+              "value": "[listKeys('ws', '2023-09-01').primarySharedKey]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "rg"
+      ]
+    },
+    "acr": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "acr",
+      "resourceGroup": "[parameters('rgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "registryName": {
+            "value": "[toLower(format('dscfleet{0}acr', parameters('nameSuffix')))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "10862588670982153281"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Region."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Tags."
+              }
+            },
+            "registryName": {
+              "type": "string",
+              "metadata": {
+                "description": "ACR name (3-50 lowercase alphanumeric, globally unique)."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ContainerRegistry/registries",
+              "apiVersion": "2023-11-01-preview",
+              "name": "[parameters('registryName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Basic"
+              },
+              "properties": {
+                "adminUserEnabled": false,
+                "publicNetworkAccess": "Enabled",
+                "anonymousPullEnabled": false
+              }
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('registryName')]"
+            },
+            "resourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName'))]"
+            },
+            "loginServer": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', parameters('registryName')), '2023-11-01-preview').loginServer]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "rg"
+      ]
+    },
+    "identity": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "identity",
+      "resourceGroup": "[parameters('rgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "identityName": {
+            "value": "[format('id-{0}', parameters('rgName'))]"
+          },
+          "acrName": {
+            "value": "[reference('acr').outputs.name.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "4311013011819504432"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Region."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Tags."
+              }
+            },
+            "identityName": {
+              "type": "string",
+              "metadata": {
+                "description": "UAMI name."
+              }
+            },
+            "acrName": {
+              "type": "string",
+              "metadata": {
+                "description": "ACR name in the same RG."
+              }
+            }
+          },
+          "variables": {
+            "acrPullRoleId": "7f951dda-4ed3-4680-a7ca-43fe172d538d"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[parameters('identityName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+              "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), variables('acrPullRoleId'))]",
+              "properties": {
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('acrPullRoleId'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "resourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]"
+            },
+            "principalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2023-01-31').principalId]"
+            },
+            "clientId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2023-01-31').clientId]"
+            },
+            "name": {
+              "type": "string",
+              "value": "[parameters('identityName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "acr",
+        "rg"
+      ]
+    },
+    "labRoles": {
+      "condition": "[parameters('assignVmContributor')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "lab-rg-roles",
+      "resourceGroup": "[parameters('labRgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "principalId": {
+            "value": "[reference('identity').outputs.principalId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "2984494531908524083"
+            }
+          },
+          "parameters": {
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "PrincipalId of the UAMI from the dashboard RG."
+              }
+            }
+          },
+          "variables": {
+            "vmContributorRoleId": "9980e02c-c2be-4d73-94e8-173b1dc7cf3c"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, parameters('principalId'), variables('vmContributorRoleId'))]",
+              "properties": {
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('vmContributorRoleId'))]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "identity"
+      ]
+    },
+    "storage": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "storage",
+      "resourceGroup": "[parameters('rgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "storageAccountName": {
+            "value": "[toLower(format('dscfleet{0}sa', parameters('nameSuffix')))]"
+          },
+          "pgShareName": {
+            "value": "pgdata"
+          },
+          "pgShareQuotaGiB": {
+            "value": 100
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "18434881500362833205"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Region."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Tags."
+              }
+            },
+            "storageAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "Storage account name (3-24 lowercase alphanumeric, globally unique)."
+              }
+            },
+            "pgShareName": {
+              "type": "string",
+              "defaultValue": "pgdata",
+              "metadata": {
+                "description": "SMB file share name for Postgres data."
+              }
+            },
+            "pgShareQuotaGiB": {
+              "type": "int",
+              "defaultValue": 100,
+              "minValue": 100,
+              "metadata": {
+                "description": "Quota in GiB for the pgdata share."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-05-01",
+              "name": "[parameters('storageAccountName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "kind": "StorageV2",
+              "properties": {
+                "accessTier": "Hot",
+                "minimumTlsVersion": "TLS1_2",
+                "allowBlobPublicAccess": false,
+                "allowSharedKeyAccess": true,
+                "publicNetworkAccess": "Enabled",
+                "supportsHttpsTrafficOnly": true,
+                "largeFileSharesState": "Enabled"
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/fileServices",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]",
+              "properties": {
+                "protocolSettings": {
+                  "smb": {
+                    "versions": "SMB3.1.1",
+                    "authenticationMethods": "NTLMv2;Kerberos",
+                    "kerberosTicketEncryption": "AES-256",
+                    "channelEncryption": "AES-256-GCM"
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', parameters('pgShareName'))]",
+              "properties": {
+                "accessTier": "TransactionOptimized",
+                "shareQuota": "[parameters('pgShareQuotaGiB')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices', parameters('storageAccountName'), 'default')]"
+              ]
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('storageAccountName')]"
+            },
+            "resourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+            },
+            "pgShareName": {
+              "type": "string",
+              "value": "[parameters('pgShareName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "rg"
+      ]
+    },
+    "env": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "aca-env",
+      "resourceGroup": "[parameters('rgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "envName": {
+            "value": "[format('cae-{0}', parameters('rgName'))]"
+          },
+          "logAnalyticsCustomerId": {
+            "value": "[reference('la').outputs.customerId.value]"
+          },
+          "logAnalyticsSharedKey": {
+            "value": "[listOutputsWithSecureValues('la', '2025-04-01').primarySharedKey]"
+          },
+          "storageAccountName": {
+            "value": "[reference('storage').outputs.name.value]"
+          },
+          "pgShareName": {
+            "value": "[reference('storage').outputs.pgShareName.value]"
+          },
+          "pgManagedStorageName": {
+            "value": "pgdata"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "4884290912076118542"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Region."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Tags."
+              }
+            },
+            "envName": {
+              "type": "string",
+              "metadata": {
+                "description": "ACA managed environment name."
+              }
+            },
+            "logAnalyticsCustomerId": {
+              "type": "string",
+              "metadata": {
+                "description": "Log Analytics customer (workspace) ID."
+              }
+            },
+            "logAnalyticsSharedKey": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Log Analytics primary shared key."
+              }
+            },
+            "storageAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "Storage account hosting the pgdata SMB share."
+              }
+            },
+            "pgShareName": {
+              "type": "string",
+              "metadata": {
+                "description": "SMB file share name for Postgres data."
+              }
+            },
+            "pgManagedStorageName": {
+              "type": "string",
+              "metadata": {
+                "description": "Logical name surfaced to Container Apps when mounting the share."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.App/managedEnvironments",
+              "apiVersion": "2024-10-02-preview",
+              "name": "[parameters('envName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "appLogsConfiguration": {
+                  "destination": "log-analytics",
+                  "logAnalyticsConfiguration": {
+                    "customerId": "[parameters('logAnalyticsCustomerId')]",
+                    "sharedKey": "[parameters('logAnalyticsSharedKey')]"
+                  }
+                },
+                "workloadProfiles": [
+                  {
+                    "name": "Consumption",
+                    "workloadProfileType": "Consumption"
+                  }
+                ],
+                "zoneRedundant": false
+              }
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments/storages",
+              "apiVersion": "2024-10-02-preview",
+              "name": "[format('{0}/{1}', parameters('envName'), parameters('pgManagedStorageName'))]",
+              "properties": {
+                "azureFile": {
+                  "accountName": "[parameters('storageAccountName')]",
+                  "accountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2023-05-01').keys[0].value]",
+                  "shareName": "[parameters('pgShareName')]",
+                  "accessMode": "ReadWrite"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/managedEnvironments', parameters('envName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "environmentId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.App/managedEnvironments', parameters('envName'))]"
+            },
+            "environmentName": {
+              "type": "string",
+              "value": "[parameters('envName')]"
+            },
+            "defaultDomain": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/managedEnvironments', parameters('envName')), '2024-10-02-preview').defaultDomain]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "la",
+        "rg",
+        "storage"
+      ]
+    },
+    "pg": {
+      "condition": "[and(parameters('deployApps'), equals(parameters('postgresMode'), 'managed'))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "pg-flex",
+      "resourceGroup": "[parameters('rgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "name": {
+            "value": "[toLower(format('{0}-pg', parameters('rgName')))]"
+          },
+          "adminPassword": {
+            "value": "[parameters('pgPassword')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "620007799809367826"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "metadata": {
+                "description": "PostgreSQL server name (3-63 lowercase alphanumeric or hyphen)."
+              }
+            },
+            "location": {
+              "type": "string"
+            },
+            "adminUser": {
+              "type": "string",
+              "defaultValue": "dscadmin",
+              "metadata": {
+                "description": "Administrator login (cannot be \"azure_superuser\", \"admin\", \"administrator\", \"root\", \"guest\", \"public\")."
+              }
+            },
+            "adminPassword": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Administrator password."
+              }
+            },
+            "databaseName": {
+              "type": "string",
+              "defaultValue": "dscfleet",
+              "metadata": {
+                "description": "Initial database to create."
+              }
+            },
+            "pgVersion": {
+              "type": "string",
+              "defaultValue": "16",
+              "metadata": {
+                "description": "Postgres major version."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+              "apiVersion": "2024-08-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Standard_B1ms",
+                "tier": "Burstable"
+              },
+              "properties": {
+                "version": "[parameters('pgVersion')]",
+                "administratorLogin": "[parameters('adminUser')]",
+                "administratorLoginPassword": "[parameters('adminPassword')]",
+                "storage": {
+                  "storageSizeGB": 32,
+                  "autoGrow": "Enabled"
+                },
+                "backup": {
+                  "backupRetentionDays": 7,
+                  "geoRedundantBackup": "Disabled"
+                },
+                "highAvailability": {
+                  "mode": "Disabled"
+                },
+                "network": {
+                  "publicNetworkAccess": "Enabled"
+                },
+                "authConfig": {
+                  "activeDirectoryAuth": "Disabled",
+                  "passwordAuth": "Enabled"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
+              "apiVersion": "2024-08-01",
+              "name": "[format('{0}/{1}', parameters('name'), 'AllowAllAzureServices')]",
+              "properties": {
+                "startIpAddress": "0.0.0.0",
+                "endIpAddress": "0.0.0.0"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('name'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+              "apiVersion": "2024-08-01",
+              "name": "[format('{0}/{1}', parameters('name'), parameters('databaseName'))]",
+              "properties": {
+                "charset": "UTF8",
+                "collation": "en_US.utf8"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('name'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "fqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('name')), '2024-08-01').fullyQualifiedDomainName]"
+            },
+            "serverName": {
+              "type": "string",
+              "value": "[parameters('name')]"
+            },
+            "databaseName": {
+              "type": "string",
+              "value": "[parameters('databaseName')]"
+            },
+            "adminUser": {
+              "type": "string",
+              "value": "[parameters('adminUser')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "rg"
+      ]
+    },
+    "apps": {
+      "condition": "[parameters('deployApps')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "apps",
+      "resourceGroup": "[parameters('rgName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "environmentId": {
+            "value": "[reference('env').outputs.environmentId.value]"
+          },
+          "environmentDefaultDomain": {
+            "value": "[reference('env').outputs.defaultDomain.value]"
+          },
+          "pgManagedStorageName": {
+            "value": "pgdata"
+          },
+          "acrLoginServer": {
+            "value": "[reference('acr').outputs.loginServer.value]"
+          },
+          "identityResourceId": {
+            "value": "[reference('identity').outputs.resourceId.value]"
+          },
+          "identityClientId": {
+            "value": "[reference('identity').outputs.clientId.value]"
+          },
+          "imageTag": {
+            "value": "[parameters('imageTag')]"
+          },
+          "pgPassword": {
+            "value": "[parameters('pgPassword')]"
+          },
+          "runAsMasterKey": {
+            "value": "[parameters('runAsMasterKey')]"
+          },
+          "postgresMode": {
+            "value": "[parameters('postgresMode')]"
+          },
+          "managedPgHost": "[if(equals(parameters('postgresMode'), 'managed'), createObject('value', reference('pg').outputs.fqdn.value), createObject('value', ''))]",
+          "managedPgUser": "[if(equals(parameters('postgresMode'), 'managed'), createObject('value', reference('pg').outputs.adminUser.value), createObject('value', ''))]",
+          "entraTenantId": {
+            "value": "[parameters('entraTenantId')]"
+          },
+          "entraApiClientId": {
+            "value": "[parameters('entraApiClientId')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "1283070382917406568"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Region."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Tags."
+              }
+            },
+            "environmentId": {
+              "type": "string",
+              "metadata": {
+                "description": "ACA managed environment resource id."
+              }
+            },
+            "environmentDefaultDomain": {
+              "type": "string",
+              "metadata": {
+                "description": "ACA env default domain (used to compute FQDNs)."
+              }
+            },
+            "pgManagedStorageName": {
+              "type": "string",
+              "metadata": {
+                "description": "Logical name of the env-level managed storage backing pgdata."
+              }
+            },
+            "acrLoginServer": {
+              "type": "string",
+              "metadata": {
+                "description": "ACR login server (e.g. dscfleetdscacr.azurecr.io)."
+              }
+            },
+            "identityResourceId": {
+              "type": "string",
+              "metadata": {
+                "description": "UAMI resource id (used for ACR pull + DefaultAzureCredential)."
+              }
+            },
+            "identityClientId": {
+              "type": "string",
+              "metadata": {
+                "description": "UAMI client id (DefaultAzureCredential needs this when multiple managed identities are attached)."
+              }
+            },
+            "imageTag": {
+              "type": "string",
+              "defaultValue": "latest",
+              "metadata": {
+                "description": "Container image tag to deploy (e.g. git short SHA, or `latest`)."
+              }
+            },
+            "pgUser": {
+              "type": "string",
+              "defaultValue": "dscfleet",
+              "metadata": {
+                "description": "Postgres database user name."
+              }
+            },
+            "pgDatabase": {
+              "type": "string",
+              "defaultValue": "dscfleet",
+              "metadata": {
+                "description": "Postgres database name."
+              }
+            },
+            "pgPassword": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Postgres password (random if omitted)."
+              }
+            },
+            "runAsMasterKey": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "RUNAS_MASTER_KEY for AES-256-GCM encryption of password run-as creds. Base64, 32 bytes. Empty disables password run-as."
+              }
+            },
+            "azureSubscriptionId": {
+              "type": "string",
+              "defaultValue": "[subscription().subscriptionId]",
+              "metadata": {
+                "description": "Azure subscription id where lab VMs live (passed to the API for Run-Command)."
+              }
+            },
+            "agentPollDefaultSeconds": {
+              "type": "int",
+              "defaultValue": 60,
+              "metadata": {
+                "description": "Default poll interval (seconds) advertised to agents."
+              }
+            },
+            "postgresMode": {
+              "type": "string",
+              "defaultValue": "container",
+              "allowedValues": [
+                "container",
+                "managed"
+              ],
+              "metadata": {
+                "description": "Postgres mode: \"container\" uses an in-env postgres container with Azure Files storage; \"managed\" uses Azure Database for PostgreSQL Flexible Server."
+              }
+            },
+            "managedPgHost": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "When postgresMode=managed, the FQDN of the flexible server (e.g. dscfleet-pg.postgres.database.azure.com)."
+              }
+            },
+            "managedPgUser": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "When postgresMode=managed, the admin user."
+              }
+            },
+            "entraTenantId": {
+              "type": "string",
+              "metadata": {
+                "description": "Entra (Azure AD) tenant ID for dashboard auth."
+              }
+            },
+            "entraApiClientId": {
+              "type": "string",
+              "metadata": {
+                "description": "Entra app registration client ID (also the API audience)."
+              }
+            }
+          },
+          "variables": {
+            "webFqdn": "[format('web.{0}', parameters('environmentDefaultDomain'))]",
+            "dbHost": "[if(equals(parameters('postgresMode'), 'managed'), parameters('managedPgHost'), 'postgres')]",
+            "dbUser": "[if(equals(parameters('postgresMode'), 'managed'), parameters('managedPgUser'), parameters('pgUser'))]",
+            "dbSslSuffix": "[if(equals(parameters('postgresMode'), 'managed'), '&sslmode=require', '')]",
+            "databaseUrl": "[format('postgresql://{0}:{1}@{2}:5432/{3}?schema=public{4}', variables('dbUser'), parameters('pgPassword'), variables('dbHost'), parameters('pgDatabase'), variables('dbSslSuffix'))]"
+          },
+          "resources": [
+            {
+              "condition": "[equals(parameters('postgresMode'), 'container')]",
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2024-10-02-preview",
+              "name": "postgres",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('identityResourceId'))]": {}
+                }
+              },
+              "properties": {
+                "environmentId": "[parameters('environmentId')]",
+                "workloadProfileName": "Consumption",
+                "configuration": {
+                  "activeRevisionsMode": "Single",
+                  "ingress": {
+                    "external": false,
+                    "transport": "tcp",
+                    "targetPort": 5432,
+                    "exposedPort": 5432
+                  },
+                  "secrets": [
+                    {
+                      "name": "pg-password",
+                      "value": "[parameters('pgPassword')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "postgres",
+                      "image": "postgres:16-alpine",
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "POSTGRES_USER",
+                          "value": "[parameters('pgUser')]"
+                        },
+                        {
+                          "name": "POSTGRES_DB",
+                          "value": "[parameters('pgDatabase')]"
+                        },
+                        {
+                          "name": "POSTGRES_PASSWORD",
+                          "secretRef": "pg-password"
+                        },
+                        {
+                          "name": "PGDATA",
+                          "value": "/var/lib/postgresql/data/pgdata"
+                        }
+                      ],
+                      "volumeMounts": [
+                        {
+                          "volumeName": "pgdata-vol",
+                          "mountPath": "/var/lib/postgresql/data"
+                        }
+                      ],
+                      "probes": [
+                        {
+                          "type": "Liveness",
+                          "tcpSocket": {
+                            "port": 5432
+                          },
+                          "initialDelaySeconds": 60,
+                          "periodSeconds": 30,
+                          "failureThreshold": 6
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 1
+                  },
+                  "volumes": [
+                    {
+                      "name": "pgdata-vol",
+                      "storageType": "AzureFile",
+                      "storageName": "[parameters('pgManagedStorageName')]"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2024-10-02-preview",
+              "name": "api",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('identityResourceId'))]": {}
+                }
+              },
+              "properties": {
+                "environmentId": "[parameters('environmentId')]",
+                "workloadProfileName": "Consumption",
+                "configuration": {
+                  "activeRevisionsMode": "Single",
+                  "ingress": {
+                    "external": true,
+                    "transport": "auto",
+                    "targetPort": 3000,
+                    "allowInsecure": false
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "identity": "[parameters('identityResourceId')]"
+                    }
+                  ],
+                  "secrets": [
+                    {
+                      "name": "database-url",
+                      "value": "[variables('databaseUrl')]"
+                    },
+                    {
+                      "name": "runas-master-key",
+                      "value": "[parameters('runAsMasterKey')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "api",
+                      "image": "[format('{0}/dsc-fleet/api:{1}', parameters('acrLoginServer'), parameters('imageTag'))]",
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "NODE_ENV",
+                          "value": "production"
+                        },
+                        {
+                          "name": "API_PORT",
+                          "value": "3000"
+                        },
+                        {
+                          "name": "LOG_LEVEL",
+                          "value": "info"
+                        },
+                        {
+                          "name": "DATABASE_URL",
+                          "secretRef": "database-url"
+                        },
+                        {
+                          "name": "RUNAS_MASTER_KEY",
+                          "secretRef": "runas-master-key"
+                        },
+                        {
+                          "name": "PUBLIC_BASE_URL",
+                          "value": "[format('https://{0}', variables('webFqdn'))]"
+                        },
+                        {
+                          "name": "AGENT_POLL_DEFAULT_SECONDS",
+                          "value": "[string(parameters('agentPollDefaultSeconds'))]"
+                        },
+                        {
+                          "name": "AZURE_SUBSCRIPTION_ID",
+                          "value": "[parameters('azureSubscriptionId')]"
+                        },
+                        {
+                          "name": "AZURE_CLIENT_ID",
+                          "value": "[parameters('identityClientId')]"
+                        },
+                        {
+                          "name": "ENTRA_TENANT_ID",
+                          "value": "[parameters('entraTenantId')]"
+                        },
+                        {
+                          "name": "ENTRA_API_CLIENT_ID",
+                          "value": "[parameters('entraApiClientId')]"
+                        }
+                      ],
+                      "probes": [
+                        {
+                          "type": "Liveness",
+                          "httpGet": {
+                            "path": "/healthz",
+                            "port": 3000
+                          },
+                          "initialDelaySeconds": 60,
+                          "periodSeconds": 30,
+                          "failureThreshold": 6
+                        },
+                        {
+                          "type": "Readiness",
+                          "httpGet": {
+                            "path": "/healthz",
+                            "port": 3000
+                          },
+                          "initialDelaySeconds": 10,
+                          "periodSeconds": 10,
+                          "failureThreshold": 6
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 1
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/containerApps', 'postgres')]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2024-10-02-preview",
+              "name": "web",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('identityResourceId'))]": {}
+                }
+              },
+              "properties": {
+                "environmentId": "[parameters('environmentId')]",
+                "workloadProfileName": "Consumption",
+                "configuration": {
+                  "activeRevisionsMode": "Single",
+                  "ingress": {
+                    "external": true,
+                    "transport": "auto",
+                    "targetPort": 80,
+                    "allowInsecure": false
+                  },
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "identity": "[parameters('identityResourceId')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "web",
+                      "image": "[format('{0}/dsc-fleet/web:{1}', parameters('acrLoginServer'), parameters('imageTag'))]",
+                      "resources": {
+                        "cpu": "[json('0.25')]",
+                        "memory": "0.5Gi"
+                      },
+                      "probes": [
+                        {
+                          "type": "Liveness",
+                          "httpGet": {
+                            "path": "/",
+                            "port": 80
+                          },
+                          "initialDelaySeconds": 30,
+                          "periodSeconds": 30,
+                          "failureThreshold": 6
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 1
+                  }
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "postgresName": {
+              "type": "string",
+              "value": "postgres"
+            },
+            "apiFqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/containerApps', 'api'), '2024-10-02-preview').configuration.ingress.fqdn]"
+            },
+            "webFqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/containerApps', 'web'), '2024-10-02-preview').configuration.ingress.fqdn]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "acr",
+        "env",
+        "identity",
+        "pg",
+        "rg"
+      ]
+    }
+  },
+  "outputs": {
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[parameters('rgName')]"
+    },
+    "location": {
+      "type": "string",
+      "value": "[parameters('location')]"
+    },
+    "acrLoginServer": {
+      "type": "string",
+      "value": "[reference('acr').outputs.loginServer.value]"
+    },
+    "acrName": {
+      "type": "string",
+      "value": "[reference('acr').outputs.name.value]"
+    },
+    "identityResourceId": {
+      "type": "string",
+      "value": "[reference('identity').outputs.resourceId.value]"
+    },
+    "identityPrincipalId": {
+      "type": "string",
+      "value": "[reference('identity').outputs.principalId.value]"
+    },
+    "identityClientId": {
+      "type": "string",
+      "value": "[reference('identity').outputs.clientId.value]"
+    },
+    "containerAppsEnvironmentId": {
+      "type": "string",
+      "value": "[reference('env').outputs.environmentId.value]"
+    },
+    "containerAppsEnvironmentDefaultDomain": {
+      "type": "string",
+      "value": "[reference('env').outputs.defaultDomain.value]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[reference('storage').outputs.name.value]"
+    },
+    "pgManagedStorageName": {
+      "type": "string",
+      "value": "pgdata"
+    },
+    "logAnalyticsWorkspaceId": {
+      "type": "string",
+      "value": "[reference('la').outputs.workspaceId.value]"
+    },
+    "apiFqdn": {
+      "type": "string",
+      "value": "[if(parameters('deployApps'), reference('apps').outputs.apiFqdn.value, '')]"
+    },
+    "webFqdn": {
+      "type": "string",
+      "value": "[if(parameters('deployApps'), reference('apps').outputs.webFqdn.value, '')]"
+    }
+  }
+}

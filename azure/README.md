@@ -15,7 +15,6 @@ Resource group: `dsc-fleet-dashboard`. Lab RG (cross-RG VM Contributor):
 ```
 azure/
 ├── README.md                ← this file
-├── ENTRA-AUTH.md            ← Entra app registration + auth wiring
 ├── bicep/
 │   ├── main.bicep           ← subscription-scope entry point (creates RG + modules)
 │   └── modules/
@@ -28,15 +27,18 @@ azure/
 │       ├── pgFlexible.bicep
 │       └── apps.bicep
 └── scripts/
-    ├── deploy.ps1           ← Phase 1: infra only (deployApps=false)
-    ├── build-and-push.ps1   ← Phase 2: az acr build → ACR
-    ├── deploy-apps.ps1      ← Phase 3: full deploy (deployApps=true)
-    └── setup-entra.ps1      ← App registration + .azure/secrets.local.json
+    ├── deploy.ps1           ← Phase 1: infra (RG, ACR, UAMI, ACA env, storage)
+    ├── setup-entra.ps1      ← Phase 2: Entra app reg → .azure/secrets.local.json
+    ├── build-and-push.ps1   ← Phase 3: az acr build → ACR
+    └── deploy-apps.ps1      ← Phase 4: Postgres flex + Container Apps
 ```
 
 There is no separate `*.bicepparam` file. Parameters are passed inline by the
 PowerShell scripts; secrets live in git-ignored `.azure/secrets.local.json` at
 repo root.
+
+See [`../docs/entra-setup.md`](../docs/entra-setup.md) for the Entra app
+registration design and manual portal fallback.
 
 ---
 
@@ -53,13 +55,13 @@ az account set --subscription 01e2f327-74ac-451e-8ad9-1f923a06d634
 # 1. Phase 1 — infra (RG, ACR, UAMI, storage, ACA env, Log Analytics)
 ./azure/scripts/deploy.ps1 -SkipWhatIf
 
-# 2. Entra app registration → writes .azure/secrets.local.json
+# 2. Phase 2 — Entra app registration → writes .azure/secrets.local.json
 ./azure/scripts/setup-entra.ps1
 
-# 3. Phase 2 — build & push api + web images (server-side ACR build)
+# 3. Phase 3 — build & push api + web images (server-side ACR build)
 ./azure/scripts/build-and-push.ps1
 
-# 4. Phase 3 — deploy postgres flex + the three Container Apps
+# 4. Phase 4 — deploy postgres flex + the three Container Apps
 ./azure/scripts/deploy-apps.ps1 -SkipWhatIf
 ```
 
@@ -153,7 +155,7 @@ the production deployment.
 | `rgName`              | string  | `dsc-fleet-dashboard`    | Target resource group; also seeds derived names (`log-…`, `id-…`, `cae-…`, `…-pg`).    | rg, all modules                    |
 | `labRgName`           | string  | `dsc-v3`                 | Lab RG that holds the managed Windows VMs.                                             | crossRgRole                        |
 | `assignVmContributor` | bool    | `true`                   | Assign VM Contributor on `labRgName` to the UAMI. Set `false` if you lack Owner there. | crossRgRole                        |
-| `deployApps`          | bool    | `false`                  | Phase 3 toggle. Adds pgFlexible + apps modules.                                        | pgFlexible, apps                   |
+| `deployApps`          | bool    | `false`                  | Phase 4 toggle. Adds pgFlexible + apps modules.                                        | pgFlexible, apps                   |
 | `imageTag`            | string  | `latest`                 | Tag for `dsc-fleet/api` and `dsc-fleet/web` in ACR.                                    | apps                               |
 | `postgresMode`        | string  | `managed`                | `managed` (flex server) or `container` (in-env Postgres on SMB — discouraged).         | apps, pgFlexible (conditional)     |
 | `pgPassword`          | secure  | `''`                     | Required when `deployApps=true`. Flex server admin password + `DATABASE_URL` secret.   | pgFlexible, apps                   |
