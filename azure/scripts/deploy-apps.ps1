@@ -16,6 +16,7 @@ param(
     [string] $SubscriptionId,
     [string] $Location,
     [string] $RgName,
+    [string] $LabRgName,
     [string] $NameSuffix,
     [string] $Tag            = 'latest',
     [string] $DeploymentName = ('apps-{0:yyyyMMdd-HHmmss}' -f (Get-Date)),
@@ -32,6 +33,7 @@ $p = Get-DeploymentParams
 if (-not $SubscriptionId) { $SubscriptionId = $p.subscriptionId }
 if (-not $Location)       { $Location       = $p.location }
 if (-not $RgName)         { $RgName         = $p.rgName }
+if (-not $LabRgName)      { $LabRgName      = $p.labRgName }
 if (-not $NameSuffix)     { $NameSuffix     = $p.nameSuffix }
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -91,6 +93,8 @@ az account set --subscription $SubscriptionId | Out-Null
 $paramArgs = @(
     "location=$Location",
     "rgName=$RgName",
+    "labRgName=$LabRgName",
+    "nameSuffix=$NameSuffix",
     "deployApps=true",
     "imageTag=$Tag",
     "pgPassword=$($secrets.pgPassword)",
@@ -98,6 +102,13 @@ $paramArgs = @(
     "entraTenantId=$($secrets.entraTenantId)",
     "entraApiClientId=$($secrets.entraClientId)"
 )
+
+Write-Host "Subscription:  $SubscriptionId" -ForegroundColor DarkGray
+Write-Host "Location:      $Location"       -ForegroundColor DarkGray
+Write-Host "Resource grp:  $RgName"         -ForegroundColor DarkGray
+Write-Host "Lab rg:        $LabRgName"      -ForegroundColor DarkGray
+Write-Host "Name suffix:   $NameSuffix      <- must match the value used by deploy.ps1" -ForegroundColor DarkGray
+Write-Host "Image tag:     $Tag"            -ForegroundColor DarkGray
 
 if (-not $SkipWhatIf) {
     Write-Host "`nRunning what-if..." -ForegroundColor Cyan
