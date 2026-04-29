@@ -45,7 +45,11 @@ const route: FastifyPluginAsync = async (app) => {
         orderBy: { requestedAt: 'desc' },
         take,
       });
-      return reply.send(rows.map((r) => shape(r, false)));
+      // Include the log on list responses too — the UI's JobCard renders
+      // job.log inline so the user can see provisioning output without
+      // drilling into the per-job detail endpoint. List is capped at 200,
+      // and individual logs are small (~10-50KB), so this is fine.
+      return reply.send(rows.map((r) => shape(r, true)));
     },
   );
 
