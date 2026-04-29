@@ -254,6 +254,19 @@ az ad app permission add `
 # it may fail silently for non-admins — that's OK, individual users will consent on first sign-in.
 az ad app permission grant --id $appId --scope User.Read --api 00000003-0000-0000-c000-000000000000 2>$null | Out-Null
 
+# 4b) Self-grant: the SPA needs delegated access to its own access_as_user scope so
+#     issued access tokens contain `scp=access_as_user`. Without this, MSAL can return
+#     a token with no scp claim and the API will reject it as "missing required scope".
+#     Add the API permission (self-reference) then grant it.
+Write-Host "Granting self-delegated access_as_user permission..." -ForegroundColor Cyan
+$selfScopeId = (az ad app show --id $appId --query "api.oauth2PermissionScopes[?value=='access_as_user'].id | [0]" -o tsv)
+if ($selfScopeId) {
+    az ad app permission add --id $appId --api $appId --api-permissions "$selfScopeId=Scope" 2>$null | Out-Null
+    az ad app permission grant --id $appId --scope access_as_user --api $appId 2>$null | Out-Null
+} else {
+    Write-Host "WARNING: access_as_user scope id not found — admin will need to grant consent in the portal." -ForegroundColor Yellow
+}
+
 # 5) Persist to secrets file.
 $secrets = @{}
 if (Test-Path $secretsFile) {

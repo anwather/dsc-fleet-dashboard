@@ -48,10 +48,15 @@ http.interceptors.response.use(
   (err: AxiosError) => {
     const status = err.response?.status ?? 0;
     const body = err.response?.data;
-    const message =
+    const baseMessage =
       (body as { message?: string })?.message ??
       err.message ??
       `HTTP ${status}`;
+    // The API echoes the underlying jose verification error in `reason` on
+    // 401s — surface it so users can tell wrong-tenant from wrong-audience
+    // from missing-scope without opening DevTools.
+    const reason = (body as { reason?: string })?.reason;
+    const message = reason ? `${baseMessage} (${reason})` : baseMessage;
     return Promise.reject(new ApiError(message, status, body));
   },
 );

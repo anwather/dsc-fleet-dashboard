@@ -90,8 +90,9 @@ const wsPlugin: FastifyPluginAsync = async (app) => {
         try {
           await verifyEntraJwt(token);
         } catch (err) {
-          req.log.debug({ err: (err as Error).message }, 'ws entra token rejected');
-          return reply.status(401).send({ error: 'Unauthorized', message: 'Invalid token' });
+          const reason = (err as Error).message;
+          req.log.warn({ reason }, 'ws entra token rejected');
+          return reply.status(401).send({ error: 'Unauthorized', message: 'Invalid token', reason });
         }
       },
     },

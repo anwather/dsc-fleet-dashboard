@@ -36,8 +36,18 @@ const entraAuthPlugin: FastifyPluginAsync = async (app) => {
       try {
         req.entraUser = await verifyEntraJwt(token);
       } catch (err) {
-        req.log.debug({ err: (err as Error).message }, 'entra token rejected');
-        return reply.status(401).send({ error: 'Unauthorized', message: 'Invalid token' });
+        const reason = (err as Error).message;
+        // Internal dashboard — surface the real reason in logs at WARN so it
+        // appears in `az containerapp logs show` without flipping log level,
+        // and echo a short code to the client so the user can tell the
+        // difference between "wrong audience" / "missing scope" / "wrong
+        // tenant" without grepping logs.
+        req.log.warn({ reason }, 'entra token rejected');
+        return reply.status(401).send({
+          error: 'Unauthorized',
+          message: 'Invalid token',
+          reason,
+        });
       }
     },
   );
