@@ -4,7 +4,7 @@ This is the runbook for an already-deployed dsc-fleet-dashboard. It covers
 how the moving parts behave at runtime, where to look when something is
 off, and the routine cleanup that should happen on a schedule.
 
-For first‑time install see [`getting-started.md`](getting-started.md). For
+For first‑time install see [`deployment.md`](deployment.md). For
 the wire-level layout see [`architecture.md`](architecture.md).
 
 ---
@@ -300,8 +300,7 @@ on-host triage), invoke the runner with `-Now`:
 
 ## 5. Postgres flex server ops
 
-Production runs Azure Database for PostgreSQL Flexible Server (the
-docker-compose `postgres:16-alpine` is for local dev only).
+The deployed stack runs Azure Database for PostgreSQL Flexible Server.
 
 ### Connection limits
 

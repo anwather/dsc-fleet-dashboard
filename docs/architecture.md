@@ -23,8 +23,8 @@ flowchart LR
 Textual summary of the edges:
 
 - **Web ↔ API**: nginx in the `web` container proxies `/api/*` and `/ws` to the `api` container over the ACA internal network. Browsers never hit the API origin directly.
-- **API ↔ Postgres**: TLS to Azure Database for PostgreSQL Flexible Server (or a local `postgres:16-alpine` container in `docker-compose.yml`).
-- **API ↔ Storage**: the ACA environment mounts an Azure Files SMB share named `pgdata` as a managed env storage. Used by the optional in-env Postgres container; the managed PG path doesn't use it at runtime.
+- **API ↔ Postgres**: TLS to Azure Database for PostgreSQL Flexible Server.
+- **API ↔ Storage**: the ACA environment mounts an Azure Files SMB share named `pgdata` as managed env storage. Provisioned by the Bicep but unused on the managed Postgres path; reserved for an optional in-environment Postgres alternative that is not part of the supported deployment.
 - **API ↔ ACR**: image pulls only — no runtime API calls. UAMI has `AcrPull` on the registry.
 - **API ↔ Azure ARM**: `@azure/arm-compute` `RunPowerShellScript` calls against VMs in the lab RG (`dsc-v3` by default). UAMI has Virtual Machine Contributor cross-RG.
 - **Web ↔ API ↔ Agents**: the only agent-reachable surface is `/api/agents/*` over HTTPS, authenticated with a per-server bearer key.
@@ -36,7 +36,7 @@ Textual summary of the edges:
 | --- | --- | --- |
 | **web** | [`apps/web`](../apps/web) | React 18 + Vite + Tailwind + shadcn/ui + Monaco. Built into static assets and served by nginx. Proxies `/api/*` and `/ws` to the api over the ACA / docker network. MSAL handles sign-in; `<AuthGate>` blocks render until there is a signed-in account. |
 | **api** | [`apps/api`](../apps/api) | Fastify 5 + Prisma 6 + zod. Single replica. Hosts UI-facing CRUD, agent wire protocol, scheduler loop, in-process job runners, and the WebSocket bridge. Validates Entra JWTs via `jose` + JWKS. |
-| **postgres** | Azure Database for PostgreSQL Flexible Server (B1ms, version 16) for production; bundled `postgres:16-alpine` for `docker-compose`. Source of truth for everything | All times `timestamptz`; large blobs (config YAML, `dsc` output, audit payloads) stored as `text` / `JSONB`. |
+| **postgres** | Azure Database for PostgreSQL Flexible Server (B1ms, version 16). Source of truth for everything | All times `timestamptz`; large blobs (config YAML, `dsc` output, audit payloads) stored as `text` / `JSONB`. |
 | **storage account** | Azure Storage + SMB file share `pgdata` (100 GiB) | Managed env storage in the ACA environment; only used by the optional in-env Postgres container. |
 | **container registry** | ACR Basic, `dscfleet<suffix>acr` | Holds `dsc-fleet/api:<tag>` and `dsc-fleet/web:<tag>`. UAMI has `AcrPull`. |
 | **scheduler-loop** | [`apps/api/src/services/scheduler.ts`](../apps/api/src/services/scheduler.ts) | `node-cron` every 30s. Marks servers offline, expires stale removals, backfills `next_due_at`, reconciles `prereq_status`, re-fires stuck queued jobs, and scrubs consumed / expired `agent_credentials` rows. |
@@ -87,7 +87,7 @@ The canonical schema is [`apps/api/prisma/schema.prisma`](../apps/api/prisma/sch
 
 ### Single api replica = singleton scheduler
 
-[`scheduler.ts`](../apps/api/src/services/scheduler.ts) holds in-process state (the `cron.ScheduledTask` handle) and assumes single-writer access to the `assignments` and `jobs` tables for offline-detection / removal-expiry / prereq-reconciliation. Running two replicas would race on `next_due_at` and double-fire jobs. Both `docker-compose.yml` and the ACA `apps` module deploy a single replica; horizontal scaling requires leader election and is out of scope for v1.
+[`scheduler.ts`](../apps/api/src/services/scheduler.ts) holds in-process state (the `cron.ScheduledTask` handle) and assumes single-writer access to the `assignments` and `jobs` tables for offline-detection / removal-expiry / prereq-reconciliation. Running two replicas would race on `next_due_at` and double-fire jobs. The ACA `apps` module deploys a single replica; horizontal scaling requires leader election and is out of scope for v1.
 
 ### Immutable config revisions
 
@@ -229,5 +229,5 @@ running.
 
 ## What is *not* protected
 
-- `/healthz` — k8s/ACA probe target.
+- `/healthz` — ACA liveness/readiness probe target.
 - `/api/agents/*` and `/api/agents/runas/:urlToken` — agents authenticate with their own per-server bearer key (or one-time provision token for the runas drop). Entra is never in this path.

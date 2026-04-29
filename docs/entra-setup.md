@@ -45,8 +45,8 @@ in the portal:
      `https://web.<env>.<region>.azurecontainerapps.io`).
 
 2. **Authentication blade**
-   - Add a second SPA redirect for local dev: `http://localhost:5173`.
-   - No mobile/native or web platforms are needed.
+   - The single SPA redirect URI for the deployed web app is enough.
+     No mobile/native or web platforms are needed.
    - Allow public client flows: **No** (SPA + PKCE is sufficient).
 
 3. **Expose an API**
@@ -81,8 +81,7 @@ The same app registration serves both the SPA and the API audience.
 
 | Platform | URI | Purpose |
 | --- | --- | --- |
-| SPA | `https://<web-fqdn>` | Production web container |
-| SPA | `http://localhost:5173` | Vite dev server |
+| SPA | `https://<web-fqdn>` | Deployed web container (Container App) |
 | API (Expose API) | `api://<clientId>` | Application ID URI used by the SPA when requesting `access_as_user` |
 
 `apps/web/src/lib/authConfig.ts` derives `redirectUri` from

@@ -84,13 +84,13 @@ The api authenticates to Azure using
 [`DefaultAzureCredential`](https://learn.microsoft.com/azure/developer/javascript/sdk/credential-chains#use-defaultazurecredential-for-flexibility).
 Configure **one** of:
 
-- **Service principal env vars** (recommended for production):
-  `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`. Set in
-  `.env` (compose) or as a `Secret` referenced from `k8s/20-api-config.yaml`
-  (k8s — keep it out of the `ConfigMap`).
-- **`AzureCliCredential` fallback** for development: mount your
-  `~/.azure` directory into the api container and the SDK will pick it up
-  without env vars. Don't ship this to production.
+- **Service principal env vars**: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
+  `AZURE_CLIENT_SECRET`. Wired in by `azure/scripts/deploy-apps.ps1` as
+  Container Apps secrets and exposed as env vars on the api revision.
+- **User-assigned managed identity** (preferred when available): set
+  `AZURE_CLIENT_ID` to the UAMI client id and omit the secret. The
+  ACA-deployed UAMI is granted the required role assignments by
+  `azure/scripts/deploy.ps1`.
 
 The required RBAC on every target VM (or a containing scope) is the data
 action `Microsoft.Compute/virtualMachines/runCommand/action`. Built-in role
@@ -142,19 +142,17 @@ is a reasonable starting point if growth becomes a concern.
 - **Operator authentication.** Either a bearer-token for the UI
   (configurable, single shared token to start) or full OIDC integration via
   `oauth2-proxy` / Authelia / your IdP of choice.
-- **TLS termination via ingress.** Today the
-  [`k8s/40-ingress.yaml`](../k8s/40-ingress.yaml) is HTTP-only. Annotate it
-  with cert-manager / a TLS secret and add an HTTPS redirect.
-- **Network policies / firewalls.** Postgres and api containers should
-  only accept traffic from the web container and from agent CIDRs
-  respectively. `NetworkPolicy` resources are not shipped.
-- **Sealed-secrets / external-secrets.** The current k8s manifests inline
-  the SP credentials in a `Secret`. For a real cluster, source them from
-  Azure Key Vault via the Secrets Store CSI driver or from `external-secrets`.
-- **Scheduled DB backup job.** A `CronJob` running `pg_dump` to durable
-  storage on a daily / hourly cadence. The lab restore loop is documented in
-  [`k8s/README.md`](../k8s/README.md#persistent-storage), but there is no
-  automation.
+- **Network egress controls.** The Postgres flexible server is reachable
+  from the ACA managed environment over the public endpoint with a
+  firewall allow-list. Move it onto a delegated subnet with private
+  endpoints once the ACA environment is on a custom VNet.
+- **Secrets in Key Vault.** Today the SP password (when used),
+  `RUNAS_MASTER_KEY`, and the Postgres password live as Container Apps
+  secrets. Wire them through Azure Key Vault references for centralised
+  rotation and audit.
+- **Scheduled DB backups beyond the platform default.** Flexible Server
+  has 7-day automated backups out of the box. Add a long-term retention
+  policy or a periodic `pg_dump` to a storage account if you need more.
 - **Rate limiting / abuse protection.** Fastify exposes a `rate-limit`
   plugin that should be wired in front of `/api/agents/register` and
   `/api/configs/parse` at minimum.

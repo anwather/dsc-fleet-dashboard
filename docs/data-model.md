@@ -1,8 +1,8 @@
 # Data model
 
 Source of truth: [`apps/api/prisma/schema.prisma`](../apps/api/prisma/schema.prisma).
-Backing store: PostgreSQL 16 (Azure Database for PostgreSQL Flexible Server in
-production, `postgres:16-alpine` for `docker-compose`). All timestamps are
+Backing store: PostgreSQL 16 on Azure Database for PostgreSQL Flexible Server.
+All timestamps are
 `timestamptz`. Primary keys are application-generated UUIDs except where
 noted.
 

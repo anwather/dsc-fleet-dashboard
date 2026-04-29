@@ -40,12 +40,15 @@ winget install -e --id Microsoft.AzureCLI
 # PowerShell 7.4+
 winget install -e --id Microsoft.PowerShell
 
-# Node.js 20 LTS (for any local dev / migrations)
+# Node.js 20 LTS — only needed if you intend to run Prisma migrations
+# from your workstation. Not required for the standard deploy (the api
+# container runs `prisma migrate deploy` on startup).
 winget install -e --id OpenJS.NodeJS.LTS
-
-# Docker Desktop is OPTIONAL — image builds are server-side via `az acr build`
-winget install -e --id Docker.DockerDesktop
 ```
+
+> Docker Desktop is **not** required. The api and web container images
+> are built server-side in Azure Container Registry via `az acr build`
+> in `azure/scripts/build-and-push.ps1`.
 
 Required identities and rights:
 
@@ -77,7 +80,8 @@ git clone "https://github.com/$org/dsc-fleet-dashboard.git" C:\Source\dsc-fleet-
 git clone "https://github.com/$org/dsc-fleet.git"           C:\Source\dsc-fleet
 
 cd C:\Source\dsc-fleet-dashboard
-npm install   # only needed for local dev / migrations from your workstation
+# `npm install` is NOT required for the standard deploy. Run it only if
+# you plan to invoke Prisma migrations from your workstation.
 ```
 
 If you fork `dsc-fleet` to a non-default org, override the bootstrap
@@ -224,7 +228,7 @@ SPA redirect URI against the real web FQDN. Substitute the
 This will:
 
 1. Create (or reuse) an app reg called `DSC Fleet Dashboard`, single tenant.
-2. Add **SPA** redirect URIs: the prod web URL + `http://localhost:5173` for dev. **No client secret. No implicit grant — PKCE only.**
+2. Add the **SPA** redirect URI for the deployed web container. **No client secret. No implicit grant — PKCE only.**
 3. Set `Application ID URI = api://<clientId>` and expose scope `access_as_user` (admins + users can consent).
 4. Add Microsoft Graph `User.Read` delegated permission and attempt admin consent (silently skipped if you lack the role — users will consent on first sign-in).
 5. Persist `entraTenantId` + `entraClientId` to `.azure/secrets.local.json` (gitignored).
