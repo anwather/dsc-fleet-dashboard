@@ -58,14 +58,71 @@ az account set --subscription 01e2f327-74ac-451e-8ad9-1f923a06d634
 az account show --query '{name:name,id:id,tenantId:tenantId}'
 ```
 
-Local repo checkout:
+### Repos to fork & clone
+
+The solution spans **two** repos. Both are templates — fork into your own
+GitHub org so you can pin tags, push your own configs, and keep secrets
+out of upstream issues. The two repos are tightly coupled at deploy
+time and you'll typically fork them together:
+
+| Upstream | Fork to | Used by |
+|---|---|---|
+| `https://github.com/anwather/dsc-fleet-dashboard` | `https://github.com/<your-org>/dsc-fleet-dashboard` | Your workstation (this runbook) |
+| `https://github.com/anwather/dsc-fleet`           | `https://github.com/<your-org>/dsc-fleet`           | Each lab VM (downloaded by `Install-DscV3.ps1` in Phase 6) |
 
 ```powershell
-git clone https://github.com/<org>/dsc-fleet-dashboard.git C:\Source\dsc-fleet-dashboard
-git clone https://github.com/anwather/dsc-fleet.git        C:\Source\dsc-fleet
+# After forking on github.com:
+$org = '<your-github-org>'   # e.g. 'anwather'
+git clone "https://github.com/$org/dsc-fleet-dashboard.git" C:\Source\dsc-fleet-dashboard
+git clone "https://github.com/$org/dsc-fleet.git"           C:\Source\dsc-fleet
+
 cd C:\Source\dsc-fleet-dashboard
 npm install   # only needed for local dev / migrations from your workstation
 ```
+
+If you fork `dsc-fleet` to a non-default org, override the bootstrap
+default in Phase 6:
+
+```powershell
+& "$repo\bootstrap\Install-DscV3.ps1" `
+    -PlatformRepoUrl "https://github.com/$org/dsc-fleet.git" `
+    -PlatformRef     main
+```
+
+> ℹ️ A third repo, `anwather/dsc-fleet-configs`, is **optional** — it
+> hosts sample DSC v3 configurations. Fork it only if you want a
+> shared library of YAML configs in addition to the in-dashboard
+> editor.
+
+### Secrets file: `.azure/secrets.local.json`
+
+A handful of scripts in `azure/scripts/` create and read a single
+gitignored file at `.azure/secrets.local.json` (the `.azure/` folder
+is auto-added to `.gitignore` by `deploy-apps.ps1` on first run).
+Schema, with which script writes each key:
+
+| Key               | Written by             | Used by                                            |
+|-------------------|------------------------|----------------------------------------------------|
+| `entraTenantId`   | `setup-entra.ps1`      | `build-and-push.ps1` (web build arg), `deploy-apps.ps1` (API env var) |
+| `entraClientId`   | `setup-entra.ps1`      | `build-and-push.ps1`, `deploy-apps.ps1`, T6 teardown |
+| `pgPassword`      | `deploy-apps.ps1`      | `deploy-apps.ps1` (Postgres admin password), Phase 5 manual psql |
+| `runAsMasterKey`  | `deploy-apps.ps1`      | `deploy-apps.ps1` (API `RUNAS_MASTER_KEY` env var) |
+
+Both `pgPassword` and `runAsMasterKey` are auto-generated on first
+deploy — you don't supply them. `runAsMasterKey` can be rotated with
+`deploy-apps.ps1 -RotateRunAsKey` (which **invalidates** any encrypted
+run-as credentials already in the database — see "Post-redeploy:
+re-register reused agents" below).
+
+> ⚠️ If you lose `secrets.local.json` after deploy you can recover
+> `entraTenantId` / `entraClientId` from the app reg, but `pgPassword`
+> and `runAsMasterKey` are only stored here and as Container App
+> secrets. Inspect the live secrets if needed:
+> ```powershell
+> az containerapp secret list -g dsc-fleet-dashboard -n api -o table
+> az containerapp secret show -g dsc-fleet-dashboard -n api `
+>     --secret-name runas-master-key --query value -o tsv
+> ```
 
 ---
 
