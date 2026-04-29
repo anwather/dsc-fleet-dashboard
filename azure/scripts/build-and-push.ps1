@@ -120,6 +120,15 @@ try {
         $tags = az acr repository show-tags --name $RegistryName --repository $_ --orderby time_desc --top 5 -o tsv
         "{0,-25} {1}" -f $_, ($tags -join ', ')
     }
+
+    Write-Host "`n=== Next step ===" -ForegroundColor Green
+    Write-Host "Deploy the freshly-built images to Container Apps:" -ForegroundColor Cyan
+    if ($Tag -eq 'latest') {
+        Write-Host "  ./azure/scripts/deploy-apps.ps1" -ForegroundColor White
+    } else {
+        Write-Host "  ./azure/scripts/deploy-apps.ps1 -ImageTag $Tag" -ForegroundColor White
+    }
+    Write-Host "(omit -ImageTag to use 'latest', which was also pushed.)" -ForegroundColor DarkGray
 }
 finally {
     Pop-Location
