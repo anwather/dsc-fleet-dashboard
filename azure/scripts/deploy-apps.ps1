@@ -90,6 +90,38 @@ if (-not $secrets.entraTenantId -or -not $secrets.entraClientId) {
 
 az account set --subscription $SubscriptionId | Out-Null
 
+# Pre-flight: confirm both images exist in ACR with the requested tag,
+# otherwise the Bicep deploy will fail ~5 minutes in with a cryptic
+# 'MANIFEST_UNKNOWN' from the Container App revision controller.
+$registryName = ('dscfleet{0}acr' -f $NameSuffix).ToLowerInvariant()
+Write-Host "`nChecking images in $registryName..." -ForegroundColor Cyan
+$missing = @()
+foreach ($repo in @('dsc-fleet/api','dsc-fleet/web')) {
+    $tags = az acr repository show-tags --name $registryName --repository $repo -o tsv 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $tags) {
+        $missing += "$repo (repository not found)"
+        continue
+    }
+    if ($tags -notcontains $Tag) {
+        $missing += "${repo}:$Tag (tag not found; available: $((@($tags) | Select-Object -First 5) -join ', '))"
+    } else {
+        Write-Host ("  OK  {0}:{1}" -f $repo, $Tag) -ForegroundColor DarkGray
+    }
+}
+if ($missing.Count -gt 0) {
+    Write-Host ""
+    Write-Host "Required images are missing from ACR:" -ForegroundColor Red
+    $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    Write-Host ""
+    Write-Host "Build & push them first:" -ForegroundColor Yellow
+    if ($Tag -eq 'latest') {
+        Write-Host "  ./azure/scripts/build-and-push.ps1" -ForegroundColor White
+    } else {
+        Write-Host "  ./azure/scripts/build-and-push.ps1 -Tag $Tag" -ForegroundColor White
+    }
+    throw "Aborting deploy-apps: images not in ACR."
+}
+
 $paramArgs = @(
     "location=$Location",
     "rgName=$RgName",
