@@ -31,7 +31,7 @@ interface EntraTokenPayload extends JWTPayload {
 }
 
 let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-let _issuer: string | null = null;
+let _issuers: string[] = [];
 let _audiences: string[] = [];
 let _requiredScope: string = 'access_as_user';
 
@@ -39,9 +39,19 @@ function init(): void {
   if (_jwks) return;
   const env = loadEnv();
   const tenant = env.ENTRA_TENANT_ID;
-  _issuer = `https://login.microsoftonline.com/${tenant}/v2.0`;
+  // AAD can issue both v1 and v2 tokens for the same app depending on what
+  // the client requested:
+  //   - v2 (preferred):   iss = https://login.microsoftonline.com/<tid>/v2.0
+  //   - v1 (legacy):      iss = https://sts.windows.net/<tid>/
+  // Browsers may have cached v1 tokens from before the app reg was switched
+  // to requestedAccessTokenVersion=2; the JWKS endpoint signs both. Accept
+  // either issuer so we don't reject otherwise-valid tokens.
+  _issuers = [
+    `https://login.microsoftonline.com/${tenant}/v2.0`,
+    `https://sts.windows.net/${tenant}/`,
+  ];
   // Tokens for our API may carry either `aud=<clientId>` (v2 endpoint default)
-  // or `aud=api://<clientId>` (App ID URI form). Accept both.
+  // or `aud=api://<clientId>` (App ID URI form / v1). Accept both.
   _audiences = [env.ENTRA_API_CLIENT_ID, `api://${env.ENTRA_API_CLIENT_ID}`];
   _requiredScope = env.ENTRA_REQUIRED_SCOPE;
   _jwks = createRemoteJWKSet(
@@ -49,7 +59,7 @@ function init(): void {
     { cooldownDuration: 30_000, cacheMaxAge: 24 * 60 * 60 * 1000 },
   );
   logger.info(
-    { issuer: _issuer, audiences: _audiences, requiredScope: _requiredScope },
+    { issuers: _issuers, audiences: _audiences, requiredScope: _requiredScope },
     'entra auth initialised',
   );
 }
@@ -61,7 +71,7 @@ function init(): void {
 export async function verifyEntraJwt(token: string): Promise<EntraUser> {
   init();
   const { payload } = await jwtVerify(token, _jwks!, {
-    issuer: _issuer!,
+    issuer: _issuers,
     audience: _audiences,
   });
   const p = payload as EntraTokenPayload;
