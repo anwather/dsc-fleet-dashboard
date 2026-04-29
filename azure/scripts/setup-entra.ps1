@@ -213,6 +213,12 @@ if (-not $scopeId) { $scopeId = [guid]::NewGuid().ToString() }
 $apiPayload = @{
     identifierUris = @($identifierUri)
     api = @{
+        # v2 tokens use the modern issuer (login.microsoftonline.com/<tid>/v2.0)
+        # which is what apps/api/src/lib/entraAuth.ts expects. Without this,
+        # AAD issues v1.0 tokens (sts.windows.net/<tid>/) when the SPA
+        # requests the App ID URI scope, and the API rejects them as
+        # "unexpected iss claim".
+        requestedAccessTokenVersion = 2
         oauth2PermissionScopes = @(
             @{
                 id                      = $scopeId
