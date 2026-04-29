@@ -135,8 +135,38 @@ resources:
 `,
   },
   {
+    id: 'msi-from-url',
+    title: '5. MSI from HTTPS URL',
+    blurb: 'Download and install an MSI from an HTTPS URL via PSDscResources/MsiPackage.',
+    resourceType: 'PSDscResources/MsiPackage',
+    fields: [
+      { name: 'name', label: 'Resource name', type: 'string', default: 'ACME Agent MSI from URL', required: true },
+      { name: 'productId', label: 'MSI ProductCode {GUID}', type: 'string', default: '{8E9A3C2A-1C7C-4F31-9F1A-AAAAAAAAAAAA}', required: true, helpText: 'MSI ProductCode — used as idempotency key. Get from msiexec /a or Win32_Product.IdentifyingNumber.' },
+      { name: 'url', label: 'HTTPS URL to MSI', type: 'string', default: 'https://downloads.contoso.com/acme/AcmeAgent-1.4.0.msi', required: true },
+      { name: 'fileHash', label: 'SHA256 of MSI (recommended)', type: 'string', default: '', helpText: 'Strongly recommended for URL installers — without it a MITM can deliver arbitrary code as SYSTEM.' },
+      { name: 'args', label: 'MSI arguments', type: 'string', default: '/qn /norestart REBOOT=ReallySuppress' },
+    ],
+    render: (v) => `${HEADER}
+  description: Install MSI ${v.productId} from URL.
+resources:
+  - name: ${v.name}
+    type: Microsoft.Windows/WindowsPowerShell
+    properties:
+      resources:
+        - name: Install MSI from URL
+          type: PSDscResources/MsiPackage
+          properties:
+            ProductId: '${v.productId}'
+            Path:      ${v.url}
+            Ensure:    Present
+            Arguments: ${v.args}${v.fileHash ? `
+            FileHash:      '${v.fileHash}'
+            HashAlgorithm: SHA256` : ''}
+`,
+  },
+  {
     id: 'psmodule-install',
-    title: '5. PSGallery module install',
+    title: '6. PSGallery module install',
     blurb: 'Install a PowerShell module via Install-PSResource (PSDscResources/Script).',
     resourceType: 'PSDscResources/Script',
     fields: [
@@ -169,7 +199,7 @@ resources:
   },
   {
     id: 'inline-script',
-    title: '6. Inline Get/Test/Set script',
+    title: '7. Inline Get/Test/Set script',
     blurb: 'Escape hatch — run an inline PowerShell script via PSDscResources/Script.',
     resourceType: 'PSDscResources/Script',
     fields: [
@@ -197,7 +227,7 @@ resources:
   },
   {
     id: 'service-state',
-    title: '7. Windows service state',
+    title: '8. Windows service state',
     blurb: 'Configure a service via PSDesiredStateConfiguration/Service.',
     resourceType: 'PSDesiredStateConfiguration/Service',
     fields: [
@@ -224,7 +254,7 @@ resources:
   },
   {
     id: 'windows-feature',
-    title: '8. Windows server role/feature',
+    title: '9. Windows server role/feature',
     blurb: 'Install/remove a server role via PSDscResources/WindowsFeature.',
     resourceType: 'PSDscResources/WindowsFeature',
     fields: [
