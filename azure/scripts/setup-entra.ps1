@@ -170,10 +170,13 @@ $objectId = az ad app show --id $appId --query id -o tsv
 if (-not $objectId) { throw "Could not resolve object id for app $appId" }
 
 # 2) SPA redirect URIs (no implicit grant; PKCE only).
-$allRedirects = @($WebUrl) + $ExtraRedirects | Select-Object -Unique
+# Force array shape: a single-element pipeline result unwraps to a scalar string,
+# which ConvertTo-Json then serialises as "redirectUris": "https://..." instead
+# of an array — Graph rejects that with "A 'StartArray' node was expected".
+$allRedirects = @(@($WebUrl) + @($ExtraRedirects) | Select-Object -Unique | Where-Object { $_ })
 $spaPayload = @{
     spa = @{
-        redirectUris = $allRedirects
+        redirectUris = @($allRedirects)
     }
     web = @{
         redirectUris = @()
