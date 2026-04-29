@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useImperativeHandle, useRef, forwardRef } from 'react';
 import Editor, { loader, type OnMount } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import { configureMonacoYaml, type MonacoYamlOptions } from 'monaco-yaml';
@@ -70,45 +70,72 @@ export interface MonacoYamlEditorProps {
   readOnly?: boolean;
 }
 
-export function MonacoYamlEditor({
-  value,
-  onChange,
-  height = '100%',
-  readOnly,
-}: MonacoYamlEditorProps) {
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-
-  useEffect(() => {
-    configureOnce();
-  }, []);
-
-  const handleMount: OnMount = (editor) => {
-    editorRef.current = editor;
-  };
-
-  // Monaco picks up the doctype from theme; switch on dark mode
-  const dark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
-
-  return (
-    <div className="monaco-editor-container border rounded-md overflow-hidden">
-      <Editor
-        height={height}
-        defaultLanguage="yaml"
-        path="config.dsc.yaml"
-        theme={dark ? 'vs-dark' : 'vs'}
-        value={value}
-        onChange={(v) => onChange(v ?? '')}
-        onMount={handleMount}
-        options={{
-          minimap: { enabled: false },
-          scrollBeyondLastLine: false,
-          fontSize: 13,
-          tabSize: 2,
-          wordWrap: 'on',
-          automaticLayout: true,
-          readOnly,
-        }}
-      />
-    </div>
-  );
+export interface MonacoYamlEditorHandle {
+  /**
+   * Run Monaco's format-document action against the current model.
+   * Resolves with the post-format text. Falls back to the current
+   * model value if no formatter is registered yet.
+   */
+  format: () => Promise<string>;
 }
+
+export const MonacoYamlEditor = forwardRef<MonacoYamlEditorHandle, MonacoYamlEditorProps>(
+  function MonacoYamlEditor({ value, onChange, height = '100%', readOnly }, ref) {
+    const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+
+    useEffect(() => {
+      configureOnce();
+    }, []);
+
+    const handleMount: OnMount = (editor) => {
+      editorRef.current = editor;
+    };
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        async format() {
+          const editor = editorRef.current;
+          if (!editor) return value;
+          const action = editor.getAction('editor.action.formatDocument');
+          if (action) {
+            try {
+              await action.run();
+            } catch {
+              /* swallow — fall through to current model text */
+            }
+          }
+          return editor.getModel()?.getValue() ?? value;
+        },
+      }),
+      [value],
+    );
+
+    // Monaco picks up the doctype from theme; switch on dark mode
+    const dark =
+      typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
+
+    return (
+      <div className="monaco-editor-container border rounded-md overflow-hidden">
+        <Editor
+          height={height}
+          defaultLanguage="yaml"
+          path="config.dsc.yaml"
+          theme={dark ? 'vs-dark' : 'vs'}
+          value={value}
+          onChange={(v) => onChange(v ?? '')}
+          onMount={handleMount}
+          options={{
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            fontSize: 13,
+            tabSize: 2,
+            wordWrap: 'on',
+            automaticLayout: true,
+            readOnly,
+          }}
+        />
+      </div>
+    );
+  },
+);

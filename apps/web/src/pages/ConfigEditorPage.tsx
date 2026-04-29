@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, AlertTriangle, Save, CheckCircle2, Trash2 } from 'lucide-react';
@@ -23,7 +23,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { MonacoYamlEditor } from '@/components/MonacoYamlEditor';
+import { MonacoYamlEditor, type MonacoYamlEditorHandle } from '@/components/MonacoYamlEditor';
 import { useToast } from '@/components/ToastProvider';
 import { apiDelete, apiGet, apiPatch, apiPost, ApiError, softFetch } from '@/lib/api';
 import { SAMPLES, BLANK_YAML, type Sample } from '@/lib/samples';
@@ -65,6 +65,16 @@ export function ConfigEditorPage() {
   const [yaml, setYaml] = useState(BLANK_YAML);
   const [parseResult, setParseResult] = useState<YamlParseResult | null>(null);
   const [activeSample, setActiveSample] = useState<Sample | null>(null);
+  const editorRef = useRef<MonacoYamlEditorHandle | null>(null);
+
+  // Format the current YAML in Monaco, sync the formatted text into our
+  // state, and return it. Called before validate/save so users can't trip
+  // on YAML alignment mistakes the formatter would have fixed.
+  const formatNow = async () => {
+    const formatted = (await editorRef.current?.format()) ?? yaml;
+    if (formatted !== yaml) setYaml(formatted);
+    return formatted;
+  };
 
   // Hydrate when existing config loads.
   useEffect(() => {
@@ -226,7 +236,7 @@ export function ConfigEditorPage() {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => validate.mutate(yaml)}
+              onClick={async () => validate.mutate(await formatNow())}
               disabled={validate.isPending}
             >
               <CheckCircle2 className="h-4 w-4" />
@@ -253,7 +263,7 @@ export function ConfigEditorPage() {
             )}
           </div>
           <div className="flex-1 min-h-0">
-            <MonacoYamlEditor value={yaml} onChange={setYaml} />
+            <MonacoYamlEditor ref={editorRef} value={yaml} onChange={setYaml} />
           </div>
         </div>
 
