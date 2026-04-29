@@ -112,13 +112,22 @@ Postgres `StatefulSet` with a PVC for durable storage between
 
 ## Documentation
 
+The full doc set lives in [`docs/`](docs/). Start with:
+
 | Document | What's in it |
 | --- | --- |
-| [Getting started](docs/getting-started.md) | Prerequisites, two install paths, end-to-end first-time walkthrough, troubleshooting. |
-| [Architecture](docs/architecture.md) | Component diagram, data model, lifecycle state machines, design rationale. |
-| [Template customisation](docs/template-customisation.md) | The handful of URLs, env vars, and code locations you'll edit when forking. |
-| [Security posture](docs/security-posture.md) | v1 trust model (no auth, internal-only) and v2 hardening backlog. |
-| [Kubernetes deployment](k8s/README.md) | minikube quickstart and per-manifest explanation. |
+| [Deployment runbook](docs/deployment.md) | End-to-end deploy + teardown of the Azure (Container Apps + managed Postgres + Entra) stack. Includes phase ordering, redeploy delta, and reused-VM reprovision. |
+| [Azure quickstart](azure/README.md) | Bicep + scripts reference for the Container Apps deployment. Companion to `deployment.md`. |
+| [User guide](docs/user-guide.md) | Dashboard walkthrough — sign in, add servers, author configs, assign, schedule, read run output. |
+| [DSC v3 authoring guide](docs/dsc-authoring.md) | Adapter selection rules (PS 5.1 vs PS 7), all 9 samples explained, `DscV3.RegFile` module reference, troubleshooting matrix. |
+| [Operations](docs/operations.md) | Day-2 ops — heartbeat, logs, schedules, image rollout, Postgres admin, common remediations. |
+| [Entra setup](docs/entra-setup.md) | App registration, redirect URIs, scopes, scripted + manual portal flow, teardown order. |
+| [Architecture](docs/architecture.md) | Component diagram, current-state design (Entra + ACA + managed Flex Server). |
+| [Data model](docs/data-model.md) | Postgres schema and lifecycle of a server / config / job / run-result. |
+| [Template customisation](docs/template-customisation.md) | URLs / env vars / code locations to edit when forking. |
+| [Security posture](docs/security-posture.md) | v1 trust model and v2 hardening backlog. |
+| [Kubernetes deployment](k8s/README.md) | minikube quickstart for local dev (parallel to the Azure path). |
+| [Getting started](docs/getting-started.md) | Original local-dev quickstart (docker-compose / minikube). |
 
 ## Repository layout
 
