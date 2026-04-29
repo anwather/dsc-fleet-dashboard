@@ -89,10 +89,11 @@ default in Phase 6:
     -PlatformRef     main
 ```
 
-> ℹ️ A third repo, `anwather/dsc-fleet-configs`, is **optional** — it
-> hosts sample DSC v3 configurations. Fork it only if you want a
-> shared library of YAML configs in addition to the in-dashboard
-> editor.
+> ℹ️ The historical third repo `anwather/dsc-fleet-configs` is
+> **archived** and no longer required. Sample configurations now ship
+> embedded in the web bundle at `apps/web/src/lib/samples.ts`; the
+> agent runs only in `-Mode Dashboard` and no longer pulls YAML from
+> a Git repo.
 
 ### Secrets file: `.azure/secrets.local.json`
 

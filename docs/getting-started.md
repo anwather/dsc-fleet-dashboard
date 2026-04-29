@@ -339,7 +339,7 @@ by `minikube delete` — see [`k8s/README.md`](../k8s/README.md#persistent-stora
 - [architecture.md](architecture.md) for the data model, lifecycle state
   machines, and the reasoning behind the design choices.
 - [template-customisation.md](template-customisation.md) for forking the
-  dsc-fleet / dsc-fleet-configs URLs, adding sample configs, or extending the
+  dsc-fleet URL, adding sample configs, or extending the
   module allow-list.
 - [security-posture.md](security-posture.md) for the v1 trust model and the
   v2 hardening backlog.

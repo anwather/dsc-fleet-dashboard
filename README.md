@@ -155,13 +155,12 @@ The dashboard is one of three repos that make up the fleet system:
   and runs them on the target VM via Azure Run-Command. The agent's
   scheduled task (`Invoke-DscRunner.ps1 -Mode Dashboard`) implements the
   poll / fetch-revision / run / post-result loop.
-- **[`anwather/dsc-fleet-configs`](https://github.com/anwather/dsc-fleet-configs)** —
-  sample DSC v3 configurations. The eight starter samples surfaced by the
-  Configs editor in this dashboard mirror the patterns committed there;
-  the agent's Phase-1 `-Mode Git` also pulls directly from this repo.
+> The third repo `anwather/dsc-fleet-configs` is **archived** and no
+> longer required. Sample DSC v3 configurations are now embedded
+> directly in the web bundle (see `apps/web/src/lib/samples.ts`).
 
 When you fork the dashboard for your own deployment, you'll typically
-fork all three. See
+fork both repos above. See
 [docs/template-customisation.md](docs/template-customisation.md) for the
 exact URLs to update.
 

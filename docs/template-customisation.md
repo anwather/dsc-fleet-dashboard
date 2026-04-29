@@ -33,9 +33,10 @@ own fork:
    change the `'https://raw.githubusercontent.com/anwather/dsc-fleet/main/bootstrap'`
    default there too.
 
-If you also forked `Register-DashboardAgent.ps1` to point at a different
-configs repo (e.g. for the agent's `-Mode Git` fallback), make that change
-inside your `dsc-fleet` fork — it is not stored in this repo.
+If you forked `Register-DashboardAgent.ps1` to change agent behaviour,
+make that change inside your `dsc-fleet` fork — it is not stored in
+this repo. (The agent's historical `-Mode Git` configs path is
+deprecated; `-Mode Dashboard` is the only supported mode.)
 
 ## Tune the agent poll cadence and offline detection
 
@@ -72,10 +73,10 @@ To add one:
 4. If your sample requires a module **not** in the existing namespace map (see
    below), add it to the API's allow-list as well.
 
-If the same YAML body is also useful as an out-of-the-box config in the
-companion [`anwather/dsc-fleet-configs`](https://github.com/anwather/dsc-fleet-configs)
-repo, drop a corresponding `.yaml` into your fork of that repo so operators
-running the agent in `-Mode Git` can pick it up too.
+> The historical `dsc-fleet-configs` repo (and the agent's `-Mode Git`
+> path) is archived and no longer used. Configurations are authored
+> directly in the dashboard UI and dispatched to agents via
+> `-Mode Dashboard`.
 
 ## Add a new built-in DSC resource to the module-extraction allow-list
 

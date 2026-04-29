@@ -1,6 +1,7 @@
 /**
- * The 8 sample DSC v3 configuration patterns from dsc-fleet-configs/samples.
- * Embedded so the web bundle doesn't depend on the configs repo at runtime.
+ * The sample DSC v3 configuration patterns surfaced in the Configs editor.
+ * Embedded so the web bundle is self-contained (the historical
+ * dsc-fleet-configs repo is archived and no longer used).
  *
  * Each sample exposes a small set of FormFields the user fills in;
  * `render(values)` produces the YAML body to seed the Monaco editor.
