@@ -127,9 +127,15 @@ function Invoke-AzGraph {
     # Wrap an `az ...` call (passed as a scriptblock) and retry once if CAE
     # rejects the cached Graph token. Returns combined stdout+stderr; sets
     # $script:LastExit to the underlying exit code.
+    #
+    # -Tolerant marks a call that may legitimately fail for non-CAE reasons
+    # (e.g. permission grants requiring an admin). Such failures are silently
+    # swallowed *after* CAE detection — so we still retry on CAE but don't
+    # surface "insufficient privileges" noise.
     param(
         [Parameter(Mandatory)] [scriptblock] $Call,
-        [string] $Description = 'az graph call'
+        [string] $Description = 'az graph call',
+        [switch] $Tolerant
     )
     $output = & $Call 2>&1
     $script:LastExit = $LASTEXITCODE
@@ -137,6 +143,10 @@ function Invoke-AzGraph {
         Update-GraphTokenInteractive "CAE challenge during '$Description'"
         $output = & $Call 2>&1
         $script:LastExit = $LASTEXITCODE
+    }
+    if ($Tolerant -and $script:LastExit -ne 0) {
+        $script:LastExit = 0
+        return $null
     }
     return $output
 }
@@ -146,7 +156,9 @@ if (-not (Test-GraphToken)) {
 }
 
 # 1) Create or update the app registration.
-$existingId = az ad app list --display-name $DisplayName --query "[0].appId" -o tsv 2>$null
+$existingId = Invoke-AzGraph -Description 'az ad app list' -Tolerant -Call {
+    az ad app list --display-name $DisplayName --query "[0].appId" -o tsv
+}
 if ($existingId) {
     Write-Host "`nFound existing app: $existingId" -ForegroundColor Yellow
     $appId = $existingId
@@ -166,8 +178,10 @@ else {
     Write-Host "Created app: $appId" -ForegroundColor Green
 }
 
-$objectId = az ad app show --id $appId --query id -o tsv
-if (-not $objectId) { throw "Could not resolve object id for app $appId" }
+$objectId = Invoke-AzGraph -Description 'az ad app show (objectId)' -Call {
+    az ad app show --id $appId --query id -o tsv
+}
+if ($script:LastExit -ne 0 -or -not $objectId) { throw "Could not resolve object id for app $appId" }
 
 # 2) SPA redirect URIs (no implicit grant; PKCE only).
 # Force array shape: a single-element pipeline result unwraps to a scalar string,
@@ -192,11 +206,13 @@ $tmpFile = New-TemporaryFile
 $spaPayload | Set-Content -Path $tmpFile -Encoding UTF8
 try {
     Write-Host "Configuring SPA redirect URIs..." -ForegroundColor Cyan
-    az rest --method PATCH `
-        --uri "https://graph.microsoft.com/v1.0/applications/$objectId" `
-        --headers "Content-Type=application/json" `
-        --body "@$($tmpFile.FullName)" | Out-Null
-    if ($LASTEXITCODE -ne 0) { Show-ManualSteps "Failed to set SPA redirect URIs" }
+    Invoke-AzGraph -Description 'az rest PATCH SPA redirectUris' -Call {
+        az rest --method PATCH `
+            --uri "https://graph.microsoft.com/v1.0/applications/$objectId" `
+            --headers "Content-Type=application/json" `
+            --body "@$($tmpFile.FullName)"
+    } | Out-Null
+    if ($script:LastExit -ne 0) { Show-ManualSteps "Failed to set SPA redirect URIs" }
 }
 finally {
     Remove-Item $tmpFile -ErrorAction SilentlyContinue
@@ -206,7 +222,10 @@ finally {
 $identifierUri = "api://$appId"
 
 # Permission scope GUID — stable and re-creatable. Generate deterministically per app.
-$existingScopes = az ad app show --id $appId --query "api.oauth2PermissionScopes" -o json | ConvertFrom-Json
+$existingScopesJson = Invoke-AzGraph -Description 'az ad app show (oauth2PermissionScopes)' -Call {
+    az ad app show --id $appId --query "api.oauth2PermissionScopes" -o json
+}
+$existingScopes = if ($script:LastExit -eq 0 -and $existingScopesJson) { $existingScopesJson | ConvertFrom-Json } else { @() }
 $scopeId = ($existingScopes | Where-Object { $_.value -eq 'access_as_user' }).id
 if (-not $scopeId) { $scopeId = [guid]::NewGuid().ToString() }
 
@@ -238,11 +257,13 @@ $tmpFile = New-TemporaryFile
 $apiPayload | Set-Content -Path $tmpFile -Encoding UTF8
 try {
     Write-Host "Configuring Expose API + access_as_user scope..." -ForegroundColor Cyan
-    az rest --method PATCH `
-        --uri "https://graph.microsoft.com/v1.0/applications/$objectId" `
-        --headers "Content-Type=application/json" `
-        --body "@$($tmpFile.FullName)" | Out-Null
-    if ($LASTEXITCODE -ne 0) { Show-ManualSteps "Failed to configure Expose API / scope" }
+    Invoke-AzGraph -Description 'az rest PATCH api scope' -Call {
+        az rest --method PATCH `
+            --uri "https://graph.microsoft.com/v1.0/applications/$objectId" `
+            --headers "Content-Type=application/json" `
+            --body "@$($tmpFile.FullName)"
+    } | Out-Null
+    if ($script:LastExit -ne 0) { Show-ManualSteps "Failed to configure Expose API / scope" }
 }
 finally {
     Remove-Item $tmpFile -ErrorAction SilentlyContinue
@@ -251,24 +272,34 @@ finally {
 # 4) Microsoft Graph User.Read delegated permission (resourceAppId 00000003-0000-0000-c000-000000000000;
 #    User.Read scope id e1fe6dd8-ba31-4d61-89e7-88639da4683d).
 Write-Host "Adding Microsoft Graph User.Read delegated permission..." -ForegroundColor Cyan
-az ad app permission add `
-    --id $appId `
-    --api 00000003-0000-0000-c000-000000000000 `
-    --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope 2>$null | Out-Null
+Invoke-AzGraph -Description 'az ad app permission add (Graph User.Read)' -Tolerant -Call {
+    az ad app permission add `
+        --id $appId `
+        --api 00000003-0000-0000-c000-000000000000 `
+        --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope
+} | Out-Null
 
 # Try admin consent. This is a separate permission requiring Privileged Role Admin / GA;
 # it may fail silently for non-admins — that's OK, individual users will consent on first sign-in.
-az ad app permission grant --id $appId --scope User.Read --api 00000003-0000-0000-c000-000000000000 2>$null | Out-Null
+Invoke-AzGraph -Description 'az ad app permission grant (Graph User.Read)' -Tolerant -Call {
+    az ad app permission grant --id $appId --scope User.Read --api 00000003-0000-0000-c000-000000000000
+} | Out-Null
 
 # 4b) Self-grant: the SPA needs delegated access to its own access_as_user scope so
 #     issued access tokens contain `scp=access_as_user`. Without this, MSAL can return
 #     a token with no scp claim and the API will reject it as "missing required scope".
 #     Add the API permission (self-reference) then grant it.
 Write-Host "Granting self-delegated access_as_user permission..." -ForegroundColor Cyan
-$selfScopeId = (az ad app show --id $appId --query "api.oauth2PermissionScopes[?value=='access_as_user'].id | [0]" -o tsv)
+$selfScopeId = Invoke-AzGraph -Description 'az ad app show (selfScopeId)' -Tolerant -Call {
+    az ad app show --id $appId --query "api.oauth2PermissionScopes[?value=='access_as_user'].id | [0]" -o tsv
+}
 if ($selfScopeId) {
-    az ad app permission add --id $appId --api $appId --api-permissions "$selfScopeId=Scope" 2>$null | Out-Null
-    az ad app permission grant --id $appId --scope access_as_user --api $appId 2>$null | Out-Null
+    Invoke-AzGraph -Description 'az ad app permission add (self access_as_user)' -Tolerant -Call {
+        az ad app permission add --id $appId --api $appId --api-permissions "$selfScopeId=Scope"
+    } | Out-Null
+    Invoke-AzGraph -Description 'az ad app permission grant (self access_as_user)' -Tolerant -Call {
+        az ad app permission grant --id $appId --scope access_as_user --api $appId
+    } | Out-Null
 } else {
     Write-Host "WARNING: access_as_user scope id not found — admin will need to grant consent in the portal." -ForegroundColor Yellow
 }
