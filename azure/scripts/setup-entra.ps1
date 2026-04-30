@@ -1,5 +1,11 @@
 # Create / update the Entra app registration that fronts the dashboard.
 #
+# Uses the Microsoft.Graph PowerShell SDK natively (Connect-MgGraph + Mg cmdlets)
+# rather than the Azure CLI, because the az CLI's cached Graph token does not
+# survive Continuous Access Evaluation challenges and silently fails on tenants
+# with strict Conditional Access. Connect-MgGraph performs an interactive MSAL
+# auth that handles CAE properly.
+#
 # - Single tenant
 # - SPA platform with one redirect URI: the deployed web URL
 # - Expose API: api://<clientId> with scope "access_as_user"
@@ -8,9 +14,6 @@
 #
 # Web URL is auto-detected from .azure/secrets.local.json (written by deploy.ps1).
 # Pass -WebUrl explicitly if you need to override.
-#
-# If the signed-in user lacks Application Administrator rights, the script
-# prints the manual portal steps and exits non-zero.
 #
 # Usage:
 #   ./azure/scripts/setup-entra.ps1
@@ -49,16 +52,8 @@ if (-not $WebUrl) {
 function Show-ManualSteps {
     param([string] $Reason)
     Write-Host ""
-    Write-Host "Cannot create the app registration via az CLI: $Reason" -ForegroundColor Red
-    if ($Reason -match 'TokenCreatedWithOutdatedPolicies|InteractionRequired|continuous access evaluation') {
-        Write-Host ""
-        Write-Host "This is a Continuous Access Evaluation (CAE) challenge — the cached" -ForegroundColor Yellow
-        Write-Host "Microsoft Graph token was invalidated by a tenant policy change." -ForegroundColor Yellow
-        Write-Host "Try this first (one line) and re-run setup-entra.ps1:" -ForegroundColor Yellow
-        Write-Host "  az logout; az login --scope https://graph.microsoft.com/.default" -ForegroundColor Cyan
-        Write-Host ""
-        Write-Host "If it still fails after a fresh login, fall back to the manual steps below." -ForegroundColor Yellow
-    }
+    Write-Host "Cannot create the app registration: $Reason" -ForegroundColor Red
+    Write-Host ""
     Write-Host "Manual portal steps:" -ForegroundColor Yellow
     Write-Host "  1. Azure Portal -> Microsoft Entra ID -> App registrations -> New registration"
     Write-Host "     - Name: $DisplayName"
@@ -80,231 +75,270 @@ function Show-ManualSteps {
     Write-Host "         User consent display name:  Access DSC Fleet Dashboard"
     Write-Host "         User consent description:   Allow the app to call the dashboard API on your behalf."
     Write-Host "         State:        Enabled"
-    Write-Host "  4. The new app -> API permissions -> Microsoft Graph -> Delegated -> User.Read (already there by default)."
+    Write-Host "  4. The new app -> Manifest -> set api.requestedAccessTokenVersion = 2 (so v2 tokens are issued)."
+    Write-Host "  5. The new app -> API permissions -> Microsoft Graph -> Delegated -> User.Read (already there by default)."
     Write-Host "     -> Grant admin consent for the tenant (button at the top)."
-    Write-Host "  5. Copy the Application (client) ID and re-run with -ClientId, OR write it to:"
+    Write-Host "  6. Copy the Application (client) ID and write it to:"
     Write-Host "       $secretsFile"
     Write-Host "     under the keys: entraTenantId, entraClientId"
     exit 1
 }
 
-# Tenant context
-$tenantId = az account show --query tenantId -o tsv
-if (-not $tenantId) { throw "Not logged in. Run 'az login' first." }
+# ---------------------------------------------------------------------------
+# Microsoft Graph SDK bootstrap
+# ---------------------------------------------------------------------------
+# We only need three sub-modules — avoid pulling the ~200MB meta-module.
+$requiredModules = @(
+    'Microsoft.Graph.Authentication',
+    'Microsoft.Graph.Applications',
+    'Microsoft.Graph.Identity.SignIns'
+)
+
+foreach ($mod in $requiredModules) {
+    if (-not (Get-Module -ListAvailable -Name $mod)) {
+        Write-Host "Installing PowerShell module $mod (CurrentUser scope)..." -ForegroundColor Cyan
+        try {
+            Install-Module -Name $mod -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+        } catch {
+            throw "Failed to install $mod. Run as admin and try: Install-Module $mod -Scope AllUsers -Force. Error: $_"
+        }
+    }
+    Import-Module $mod -ErrorAction Stop
+}
+
+# Tenant context: pull from az if available (no Mg call needed), else from params.
+$tenantId = $null
+try { $tenantId = (az account show --query tenantId -o tsv 2>$null) } catch {}
+if (-not $tenantId) { $tenantId = $p.tenantId }
+if (-not $tenantId) {
+    throw "Could not resolve tenantId. Run 'az login' first or set 'tenantId' in azure/parameters.jsonc."
+}
+
 Write-Host "Tenant:        $tenantId"
 Write-Host "Display name:  $DisplayName"
 Write-Host "SPA redirects: $WebUrl"
 $ExtraRedirects | ForEach-Object { Write-Host "               $_" }
 
-# Proactively refresh the Microsoft Graph access token. This avoids the most
-# common failure mode for this script:
-#   "Continuous access evaluation resulted in challenge with result:
-#    InteractionRequired and code: TokenCreatedWithOutdatedPolicies"
-# CAE invalidates cached Graph tokens whenever a tenant policy changes
-# (Conditional Access, MFA, sign-in frequency, group membership, etc.). The
-# Azure CLI's silent token refresh can't satisfy CAE on its own, so we force
-# an interactive re-login scoped to Microsoft Graph before any 'az ad ...'
-# call. This is a no-op on a freshly-cached token.
-function Test-GraphToken {
-    $null = az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv 2>$null
-    return ($LASTEXITCODE -eq 0)
+# ---------------------------------------------------------------------------
+# Connect to Microsoft Graph (interactive — handles CAE / Conditional Access)
+# ---------------------------------------------------------------------------
+$requiredScopes = @(
+    'Application.ReadWrite.All',
+    'Directory.ReadWrite.All',
+    'DelegatedPermissionGrant.ReadWrite.All'
+)
+
+# Reuse existing connection if one with sufficient scopes is already in place.
+$existingCtx = $null
+try { $existingCtx = Get-MgContext } catch {}
+$needConnect = $true
+if ($existingCtx -and $existingCtx.TenantId -eq $tenantId) {
+    $haveAll = $true
+    foreach ($s in $requiredScopes) {
+        if ($existingCtx.Scopes -notcontains $s) { $haveAll = $false; break }
+    }
+    if ($haveAll) {
+        Write-Host "Reusing existing Microsoft Graph session (account: $($existingCtx.Account))." -ForegroundColor DarkCyan
+        $needConnect = $false
+    }
 }
 
-function Update-GraphTokenInteractive {
-    param([string] $Reason)
-    Write-Host ""
-    Write-Host "Refreshing Microsoft Graph access token..." -ForegroundColor Cyan
-    if ($Reason) { Write-Host "  Reason: $Reason" -ForegroundColor DarkYellow }
-    az login --scope https://graph.microsoft.com/.default --tenant $tenantId --allow-no-subscriptions | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Graph token refresh failed (az login --scope https://graph.microsoft.com/.default exit $LASTEXITCODE)."
+if ($needConnect) {
+    Write-Host "Connecting to Microsoft Graph (interactive)..." -ForegroundColor Cyan
+    try {
+        Connect-MgGraph -TenantId $tenantId -Scopes $requiredScopes -NoWelcome -ErrorAction Stop | Out-Null
+    } catch {
+        Show-ManualSteps "Connect-MgGraph failed: $($_.Exception.Message)"
     }
-    # Re-pin the original Azure subscription context (interactive --scope login can switch it)
-    az account set --subscription $p.subscriptionId 2>$null | Out-Null
+    $ctx = Get-MgContext
+    Write-Host "Connected as: $($ctx.Account) (tenant $($ctx.TenantId))" -ForegroundColor Green
 }
 
-function Invoke-AzGraph {
-    # Wrap an `az ...` call (passed as a scriptblock) and retry once if CAE
-    # rejects the cached Graph token. Returns combined stdout+stderr; sets
-    # $script:LastExit to the underlying exit code.
-    #
-    # -Tolerant marks a call that may legitimately fail for non-CAE reasons
-    # (e.g. permission grants requiring an admin). Such failures are silently
-    # swallowed *after* CAE detection — so we still retry on CAE but don't
-    # surface "insufficient privileges" noise.
-    param(
-        [Parameter(Mandatory)] [scriptblock] $Call,
-        [string] $Description = 'az graph call',
-        [switch] $Tolerant
-    )
-    $output = & $Call 2>&1
-    $script:LastExit = $LASTEXITCODE
-    if ($script:LastExit -ne 0 -and ($output -match 'TokenCreatedWithOutdatedPolicies|InteractionRequired|continuous access evaluation' )) {
-        Update-GraphTokenInteractive "CAE challenge during '$Description'"
-        $output = & $Call 2>&1
-        $script:LastExit = $LASTEXITCODE
-    }
-    if ($Tolerant -and $script:LastExit -ne 0) {
-        $script:LastExit = 0
-        return $null
-    }
-    return $output
-}
-
-if (-not (Test-GraphToken)) {
-    Update-GraphTokenInteractive 'no cached Graph token'
-}
-
-# 1) Create or update the app registration.
-$existingId = Invoke-AzGraph -Description 'az ad app list' -Tolerant -Call {
-    az ad app list --display-name $DisplayName --query "[0].appId" -o tsv
-}
-if ($existingId) {
-    Write-Host "`nFound existing app: $existingId" -ForegroundColor Yellow
-    $appId = $existingId
-}
-else {
-    Write-Host "`nCreating app registration..." -ForegroundColor Cyan
-    $createJson = Invoke-AzGraph -Description 'az ad app create' -Call {
-        az ad app create `
-            --display-name $DisplayName `
-            --sign-in-audience AzureADMyOrg `
-            --output json
-    }
-    if ($script:LastExit -ne 0) {
-        Show-ManualSteps "az ad app create failed: $createJson"
-    }
-    $appId = ($createJson | ConvertFrom-Json).appId
-    Write-Host "Created app: $appId" -ForegroundColor Green
-}
-
-$objectId = Invoke-AzGraph -Description 'az ad app show (objectId)' -Call {
-    az ad app show --id $appId --query id -o tsv
-}
-if ($script:LastExit -ne 0 -or -not $objectId) { throw "Could not resolve object id for app $appId" }
-
-# 2) SPA redirect URIs (no implicit grant; PKCE only).
-# Force array shape: a single-element pipeline result unwraps to a scalar string,
-# which ConvertTo-Json then serialises as "redirectUris": "https://..." instead
-# of an array — Graph rejects that with "A 'StartArray' node was expected".
-$allRedirects = @(@($WebUrl) + @($ExtraRedirects) | Select-Object -Unique | Where-Object { $_ })
-$spaPayload = @{
-    spa = @{
-        redirectUris = @($allRedirects)
-    }
-    web = @{
-        redirectUris = @()
-        implicitGrantSettings = @{
-            enableAccessTokenIssuance = $false
-            enableIdTokenIssuance     = $false
-        }
-    }
-} | ConvertTo-Json -Depth 6 -Compress
-
-# Use az rest because `az ad app update` doesn't fully support the SPA platform.
-$tmpFile = New-TemporaryFile
-$spaPayload | Set-Content -Path $tmpFile -Encoding UTF8
+# ---------------------------------------------------------------------------
+# 1) Create or look up the app registration
+# ---------------------------------------------------------------------------
+$existing = $null
 try {
-    Write-Host "Configuring SPA redirect URIs..." -ForegroundColor Cyan
-    Invoke-AzGraph -Description 'az rest PATCH SPA redirectUris' -Call {
-        az rest --method PATCH `
-            --uri "https://graph.microsoft.com/v1.0/applications/$objectId" `
-            --headers "Content-Type=application/json" `
-            --body "@$($tmpFile.FullName)"
-    } | Out-Null
-    if ($script:LastExit -ne 0) { Show-ManualSteps "Failed to set SPA redirect URIs" }
-}
-finally {
-    Remove-Item $tmpFile -ErrorAction SilentlyContinue
+    $existing = Get-MgApplication -Filter "displayName eq '$DisplayName'" -Top 1 -ErrorAction Stop
+} catch {
+    Show-ManualSteps "Get-MgApplication failed: $($_.Exception.Message)"
 }
 
-# 3) Identifier URI (App ID URI = api://<clientId>) and access_as_user scope.
+if ($existing) {
+    $appObj = $existing
+    Write-Host "`nFound existing app: $($appObj.AppId)" -ForegroundColor Yellow
+} else {
+    Write-Host "`nCreating app registration..." -ForegroundColor Cyan
+    try {
+        $appObj = New-MgApplication `
+            -DisplayName $DisplayName `
+            -SignInAudience 'AzureADMyOrg' `
+            -ErrorAction Stop
+    } catch {
+        Show-ManualSteps "New-MgApplication failed: $($_.Exception.Message)"
+    }
+    Write-Host "Created app: $($appObj.AppId)" -ForegroundColor Green
+}
+
+$appId    = $appObj.AppId
+$objectId = $appObj.Id
+if (-not $objectId) { throw "Could not resolve object id for app $appId" }
+
+# ---------------------------------------------------------------------------
+# 2) SPA redirect URIs (no implicit grant; PKCE only)
+# ---------------------------------------------------------------------------
+$allRedirects = @(@($WebUrl) + @($ExtraRedirects) | Select-Object -Unique | Where-Object { $_ })
+
+Write-Host "Configuring SPA redirect URIs..." -ForegroundColor Cyan
+try {
+    Update-MgApplication `
+        -ApplicationId $objectId `
+        -Spa @{ RedirectUris = @($allRedirects) } `
+        -Web @{
+            RedirectUris = @()
+            ImplicitGrantSettings = @{
+                EnableAccessTokenIssuance = $false
+                EnableIdTokenIssuance     = $false
+            }
+        } `
+        -ErrorAction Stop
+} catch {
+    Show-ManualSteps "Failed to set SPA redirect URIs: $($_.Exception.Message)"
+}
+
+# ---------------------------------------------------------------------------
+# 3) Identifier URI + access_as_user scope + v2 access tokens
+# ---------------------------------------------------------------------------
 $identifierUri = "api://$appId"
 
-# Permission scope GUID — stable and re-creatable. Generate deterministically per app.
-$existingScopesJson = Invoke-AzGraph -Description 'az ad app show (oauth2PermissionScopes)' -Call {
-    az ad app show --id $appId --query "api.oauth2PermissionScopes" -o json
-}
-$existingScopes = if ($script:LastExit -eq 0 -and $existingScopesJson) { $existingScopesJson | ConvertFrom-Json } else { @() }
-$scopeId = ($existingScopes | Where-Object { $_.value -eq 'access_as_user' }).id
+# Reuse the existing scope id if present so MSAL caches don't get invalidated.
+$existingScopes = @()
+try {
+    $current = Get-MgApplication -ApplicationId $objectId -ErrorAction Stop
+    if ($current.Api -and $current.Api.Oauth2PermissionScopes) {
+        $existingScopes = @($current.Api.Oauth2PermissionScopes)
+    }
+} catch {}
+$scopeId = ($existingScopes | Where-Object { $_.Value -eq 'access_as_user' }).Id
 if (-not $scopeId) { $scopeId = [guid]::NewGuid().ToString() }
 
-$apiPayload = @{
-    identifierUris = @($identifierUri)
-    api = @{
-        # v2 tokens use the modern issuer (login.microsoftonline.com/<tid>/v2.0)
-        # which is what apps/api/src/lib/entraAuth.ts expects. Without this,
-        # AAD issues v1.0 tokens (sts.windows.net/<tid>/) when the SPA
-        # requests the App ID URI scope, and the API rejects them as
-        # "unexpected iss claim".
-        requestedAccessTokenVersion = 2
-        oauth2PermissionScopes = @(
-            @{
-                id                      = $scopeId
-                adminConsentDescription = 'Allow the app to call the DSC Fleet Dashboard API on behalf of the signed-in user.'
-                adminConsentDisplayName = 'Access DSC Fleet Dashboard'
-                userConsentDescription  = 'Allow the app to call the DSC Fleet Dashboard API on your behalf.'
-                userConsentDisplayName  = 'Access DSC Fleet Dashboard'
-                isEnabled               = $true
-                type                    = 'User'
-                value                   = 'access_as_user'
-            }
-        )
-    }
-} | ConvertTo-Json -Depth 8 -Compress
-
-$tmpFile = New-TemporaryFile
-$apiPayload | Set-Content -Path $tmpFile -Encoding UTF8
+Write-Host "Configuring Expose API + access_as_user scope (v2 tokens)..." -ForegroundColor Cyan
 try {
-    Write-Host "Configuring Expose API + access_as_user scope..." -ForegroundColor Cyan
-    Invoke-AzGraph -Description 'az rest PATCH api scope' -Call {
-        az rest --method PATCH `
-            --uri "https://graph.microsoft.com/v1.0/applications/$objectId" `
-            --headers "Content-Type=application/json" `
-            --body "@$($tmpFile.FullName)"
-    } | Out-Null
-    if ($script:LastExit -ne 0) { Show-ManualSteps "Failed to configure Expose API / scope" }
-}
-finally {
-    Remove-Item $tmpFile -ErrorAction SilentlyContinue
-}
-
-# 4) Microsoft Graph User.Read delegated permission (resourceAppId 00000003-0000-0000-c000-000000000000;
-#    User.Read scope id e1fe6dd8-ba31-4d61-89e7-88639da4683d).
-Write-Host "Adding Microsoft Graph User.Read delegated permission..." -ForegroundColor Cyan
-Invoke-AzGraph -Description 'az ad app permission add (Graph User.Read)' -Tolerant -Call {
-    az ad app permission add `
-        --id $appId `
-        --api 00000003-0000-0000-c000-000000000000 `
-        --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope
-} | Out-Null
-
-# Try admin consent. This is a separate permission requiring Privileged Role Admin / GA;
-# it may fail silently for non-admins — that's OK, individual users will consent on first sign-in.
-Invoke-AzGraph -Description 'az ad app permission grant (Graph User.Read)' -Tolerant -Call {
-    az ad app permission grant --id $appId --scope User.Read --api 00000003-0000-0000-c000-000000000000
-} | Out-Null
-
-# 4b) Self-grant: the SPA needs delegated access to its own access_as_user scope so
-#     issued access tokens contain `scp=access_as_user`. Without this, MSAL can return
-#     a token with no scp claim and the API will reject it as "missing required scope".
-#     Add the API permission (self-reference) then grant it.
-Write-Host "Granting self-delegated access_as_user permission..." -ForegroundColor Cyan
-$selfScopeId = Invoke-AzGraph -Description 'az ad app show (selfScopeId)' -Tolerant -Call {
-    az ad app show --id $appId --query "api.oauth2PermissionScopes[?value=='access_as_user'].id | [0]" -o tsv
-}
-if ($selfScopeId) {
-    Invoke-AzGraph -Description 'az ad app permission add (self access_as_user)' -Tolerant -Call {
-        az ad app permission add --id $appId --api $appId --api-permissions "$selfScopeId=Scope"
-    } | Out-Null
-    Invoke-AzGraph -Description 'az ad app permission grant (self access_as_user)' -Tolerant -Call {
-        az ad app permission grant --id $appId --scope access_as_user --api $appId
-    } | Out-Null
-} else {
-    Write-Host "WARNING: access_as_user scope id not found — admin will need to grant consent in the portal." -ForegroundColor Yellow
+    Update-MgApplication `
+        -ApplicationId $objectId `
+        -IdentifierUris @($identifierUri) `
+        -Api @{
+            # v2 tokens use the modern issuer (login.microsoftonline.com/<tid>/v2.0)
+            # which is what apps/api/src/lib/entraAuth.ts expects.
+            RequestedAccessTokenVersion = 2
+            Oauth2PermissionScopes = @(
+                @{
+                    Id                      = $scopeId
+                    AdminConsentDescription = 'Allow the app to call the DSC Fleet Dashboard API on behalf of the signed-in user.'
+                    AdminConsentDisplayName = 'Access DSC Fleet Dashboard'
+                    UserConsentDescription  = 'Allow the app to call the DSC Fleet Dashboard API on your behalf.'
+                    UserConsentDisplayName  = 'Access DSC Fleet Dashboard'
+                    IsEnabled               = $true
+                    Type                    = 'User'
+                    Value                   = 'access_as_user'
+                }
+            )
+        } `
+        -ErrorAction Stop
+} catch {
+    Show-ManualSteps "Failed to configure Expose API / scope: $($_.Exception.Message)"
 }
 
-# 5) Persist to secrets file.
+# ---------------------------------------------------------------------------
+# 4) RequiredResourceAccess: Graph User.Read + self access_as_user
+# ---------------------------------------------------------------------------
+# Constants
+$graphAppId         = '00000003-0000-0000-c000-000000000000'   # Microsoft Graph
+$userReadScopeId    = 'e1fe6dd8-ba31-4d61-89e7-88639da4683d'   # Graph User.Read (delegated)
+
+Write-Host "Setting required API permissions (Graph User.Read + self access_as_user)..." -ForegroundColor Cyan
+try {
+    Update-MgApplication `
+        -ApplicationId $objectId `
+        -RequiredResourceAccess @(
+            @{
+                ResourceAppId  = $graphAppId
+                ResourceAccess = @(
+                    @{ Id = $userReadScopeId; Type = 'Scope' }
+                )
+            },
+            @{
+                ResourceAppId  = $appId
+                ResourceAccess = @(
+                    @{ Id = $scopeId; Type = 'Scope' }
+                )
+            }
+        ) `
+        -ErrorAction Stop
+} catch {
+    Write-Host "WARNING: Update-MgApplication (RequiredResourceAccess) failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "         Users will be prompted to consent on first sign-in." -ForegroundColor Yellow
+}
+
+# ---------------------------------------------------------------------------
+# 5) Ensure the app's Service Principal exists, then grant admin consent
+#    (admin consent is best-effort: Privileged Role Admin / GA only).
+# ---------------------------------------------------------------------------
+$clientSp = $null
+try { $clientSp = Get-MgServicePrincipal -Filter "appId eq '$appId'" -Top 1 -ErrorAction Stop } catch {}
+if (-not $clientSp) {
+    Write-Host "Creating service principal for app..." -ForegroundColor Cyan
+    try {
+        $clientSp = New-MgServicePrincipal -AppId $appId -ErrorAction Stop
+    } catch {
+        Write-Host "WARNING: New-MgServicePrincipal failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+$graphSp = $null
+try { $graphSp = Get-MgServicePrincipal -Filter "appId eq '$graphAppId'" -Top 1 -ErrorAction Stop } catch {}
+
+function Grant-AdminConsentScope {
+    param(
+        [string] $ClientSpId,
+        [string] $ResourceSpId,
+        [string] $Scope
+    )
+    if (-not $ClientSpId -or -not $ResourceSpId) { return }
+    # If a grant already exists for (clientId,resourceId,AllPrincipals), patch it; else create.
+    $existing = $null
+    try {
+        $existing = Get-MgOauth2PermissionGrant -Filter "clientId eq '$ClientSpId' and resourceId eq '$ResourceSpId' and consentType eq 'AllPrincipals'" -Top 1 -ErrorAction Stop
+    } catch {}
+    if ($existing) {
+        $scopes = ($existing.Scope -split ' ') + $Scope | Where-Object { $_ } | Select-Object -Unique
+        try {
+            Update-MgOauth2PermissionGrant -OAuth2PermissionGrantId $existing.Id -Scope ($scopes -join ' ') -ErrorAction Stop
+        } catch {
+            Write-Host "WARNING: could not update existing OAuth2 grant: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    } else {
+        try {
+            New-MgOauth2PermissionGrant -BodyParameter @{
+                clientId    = $ClientSpId
+                consentType = 'AllPrincipals'
+                resourceId  = $ResourceSpId
+                scope       = $Scope
+            } -ErrorAction Stop | Out-Null
+        } catch {
+            Write-Host "WARNING: admin consent for '$Scope' not granted (need Privileged Role Admin / GA): $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "         Individual users will consent on first sign-in." -ForegroundColor Yellow
+        }
+    }
+}
+
+Write-Host "Granting admin consent (best-effort)..." -ForegroundColor Cyan
+Grant-AdminConsentScope -ClientSpId $clientSp.Id -ResourceSpId $graphSp.Id  -Scope 'User.Read'
+Grant-AdminConsentScope -ClientSpId $clientSp.Id -ResourceSpId $clientSp.Id -Scope 'access_as_user'
+
+# ---------------------------------------------------------------------------
+# 6) Persist to secrets file
+# ---------------------------------------------------------------------------
 $secrets = @{}
 if (Test-Path $secretsFile) {
     $secrets = Get-Content $secretsFile -Raw | ConvertFrom-Json -AsHashtable
