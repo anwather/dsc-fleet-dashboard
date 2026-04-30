@@ -82,7 +82,12 @@ var dbHost = postgresMode == 'managed' ? managedPgHost : 'postgres'
 var dbUser = postgresMode == 'managed' ? managedPgUser : pgUser
 // sslmode=require is required for Azure flexible server; harmless for in-env pg.
 var dbSslSuffix = postgresMode == 'managed' ? '&sslmode=require' : ''
-var databaseUrl = 'postgresql://${dbUser}:${pgPassword}@${dbHost}:5432/${pgDatabase}?schema=public${dbSslSuffix}'
+// Standard base64 alphabet contains '+', '/', and '=' which are reserved in the
+// URL user-info component. Without percent-encoding, Prisma rejects the URL with
+// "P1013: invalid port number in database URL" because the '/' in the password
+// gets parsed as the start of the path and the parser desyncs from the port.
+var pgPasswordEncoded = replace(replace(replace(pgPassword, '+', '%2B'), '/', '%2F'), '=', '%3D')
+var databaseUrl = 'postgresql://${dbUser}:${pgPasswordEncoded}@${dbHost}:5432/${pgDatabase}?schema=public${dbSslSuffix}'
 
 // -----------------------------------------------------------------------------
 // Postgres (internal-only TCP, single replica, AzureFile-backed)

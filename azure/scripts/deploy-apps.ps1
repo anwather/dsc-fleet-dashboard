@@ -59,6 +59,16 @@ function New-Base64Bytes([int]$NumBytes) {
     return [Convert]::ToBase64String($b)
 }
 
+# URL-safe base64 (RFC 4648 §5): replaces '+' with '-', '/' with '_', strips '='.
+# Postgres accepts any printable ASCII for passwords, and these chars don't need
+# percent-encoding in a URL user-info component. Used for pgPassword so the
+# DATABASE_URL Prisma sees doesn't desync on '/' or '+'.
+function New-UrlSafeBase64Bytes([int]$NumBytes) {
+    $b = New-Object byte[] $NumBytes
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+    return ([Convert]::ToBase64String($b)) -replace '\+','-' -replace '/','_' -replace '=',''
+}
+
 # Load or initialise secrets.
 $secrets = @{}
 if (Test-Path $secretsFile) {
@@ -66,9 +76,9 @@ if (Test-Path $secretsFile) {
 }
 
 if (-not $secrets.pgPassword) {
-    # Postgres allows printable ASCII; base64 happens to be safe for URLs too.
-    $secrets.pgPassword = New-Base64Bytes 24
-    Write-Host "Generated new Postgres password." -ForegroundColor Yellow
+    # URL-safe alphabet only — base64 with '+' or '/' breaks DATABASE_URL parsing.
+    $secrets.pgPassword = New-UrlSafeBase64Bytes 24
+    Write-Host "Generated new Postgres password (URL-safe)." -ForegroundColor Yellow
 }
 
 if ($RotateRunAsKey -or -not $secrets.runAsMasterKey) {

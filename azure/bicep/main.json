@@ -5,8 +5,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.41.2.15936",
-      "templateHash": "7676075765414716523"
+      "version": "0.42.1.51946",
+      "templateHash": "7268346219894094915"
     }
   },
   "parameters": {
@@ -148,8 +148,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "8826896528087202914"
+              "version": "0.42.1.51946",
+              "templateHash": "1313533605358852682"
             }
           },
           "parameters": {
@@ -240,8 +240,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "10862588670982153281"
+              "version": "0.42.1.51946",
+              "templateHash": "2093558842719085624"
             }
           },
           "parameters": {
@@ -331,8 +331,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "4311013011819504432"
+              "version": "0.42.1.51946",
+              "templateHash": "11356874187701105868"
             }
           },
           "parameters": {
@@ -434,8 +434,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "2984494531908524083"
+              "version": "0.42.1.51946",
+              "templateHash": "17508172676238880304"
             }
           },
           "parameters": {
@@ -500,8 +500,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "18434881500362833205"
+              "version": "0.42.1.51946",
+              "templateHash": "9535294637599391089"
             }
           },
           "parameters": {
@@ -653,8 +653,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "4884290912076118542"
+              "version": "0.42.1.51946",
+              "templateHash": "620884401355956726"
             }
           },
           "parameters": {
@@ -798,8 +798,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "620007799809367826"
+              "version": "0.42.1.51946",
+              "templateHash": "6856608829539176870"
             }
           },
           "parameters": {
@@ -986,8 +986,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.41.2.15936",
-              "templateHash": "1283070382917406568"
+              "version": "0.42.1.51946",
+              "templateHash": "16403378331651803314"
             }
           },
           "parameters": {
@@ -1130,7 +1130,8 @@
             "dbHost": "[if(equals(parameters('postgresMode'), 'managed'), parameters('managedPgHost'), 'postgres')]",
             "dbUser": "[if(equals(parameters('postgresMode'), 'managed'), parameters('managedPgUser'), parameters('pgUser'))]",
             "dbSslSuffix": "[if(equals(parameters('postgresMode'), 'managed'), '&sslmode=require', '')]",
-            "databaseUrl": "[format('postgresql://{0}:{1}@{2}:5432/{3}?schema=public{4}', variables('dbUser'), parameters('pgPassword'), variables('dbHost'), parameters('pgDatabase'), variables('dbSslSuffix'))]"
+            "pgPasswordEncoded": "[replace(replace(replace(parameters('pgPassword'), '+', '%2B'), '/', '%2F'), '=', '%3D')]",
+            "databaseUrl": "[format('postgresql://{0}:{1}@{2}:5432/{3}?schema=public{4}', variables('dbUser'), variables('pgPasswordEncoded'), variables('dbHost'), parameters('pgDatabase'), variables('dbSslSuffix'))]"
           },
           "resources": [
             {
