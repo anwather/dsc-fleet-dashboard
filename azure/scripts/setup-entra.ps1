@@ -145,8 +145,17 @@ if ($existingCtx -and $existingCtx.TenantId -eq $tenantId) {
 
 if ($needConnect) {
     Write-Host "Connecting to Microsoft Graph (interactive)..." -ForegroundColor Cyan
+    # -NoWelcome was added in Microsoft.Graph 2.0; fall back gracefully on older modules.
+    $connectArgs = @{
+        TenantId    = $tenantId
+        Scopes      = $requiredScopes
+        ErrorAction = 'Stop'
+    }
+    if ((Get-Command Connect-MgGraph).Parameters.ContainsKey('NoWelcome')) {
+        $connectArgs['NoWelcome'] = $true
+    }
     try {
-        Connect-MgGraph -TenantId $tenantId -Scopes $requiredScopes -NoWelcome -ErrorAction Stop | Out-Null
+        Connect-MgGraph @connectArgs | Out-Null
     } catch {
         Show-ManualSteps "Connect-MgGraph failed: $($_.Exception.Message)"
     }
