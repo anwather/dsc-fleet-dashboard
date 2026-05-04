@@ -39,10 +39,10 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_load-params.ps1')
 $p = Get-DeploymentParams
 if (-not $SubscriptionId) { $SubscriptionId = $p.subscriptionId }
-if (-not $RgName)         { $RgName         = $p.rgName }
-if (-not $LabRgName)      { $LabRgName      = $p.labRgName }
+if (-not $RgName) { $RgName = $p.rgName }
+if (-not $LabRgName) { $LabRgName = $p.labRgName }
 
-$repoRoot    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $secretsFile = Join-Path $repoRoot '.azure\secrets.local.json'
 
 function Confirm-Step {
@@ -85,10 +85,12 @@ if ($LASTEXITCODE -eq 0 -and $rgCheck) {
         if ($ids.Count -gt 1) {
             Write-Host "  WARNING: multiple managed identities in $RgName — using the first." -ForegroundColor Yellow
         }
-    } else {
+    }
+    else {
         Write-Host "  No managed identities found in $RgName — nothing to clean up on the lab RG." -ForegroundColor DarkGray
     }
-} else {
+}
+else {
     Write-Host "`nResource group $RgName does not exist (or you can't see it). Skipping RG delete." -ForegroundColor Yellow
 }
 
@@ -100,7 +102,8 @@ if (-not $KeepEntraApp -and (Test-Path $secretsFile)) {
         if ($entraAppId) {
             Write-Host "Entra app to delete: $entraAppId  (from $secretsFile)" -ForegroundColor DarkGray
         }
-    } catch {
+    }
+    catch {
         Write-Host "Could not parse $secretsFile — skipping Entra app delete." -ForegroundColor Yellow
     }
 }
@@ -132,7 +135,8 @@ if ($identityPrincipalId) {
 
         if ($assignments.Count -eq 0) {
             Write-Host "No role assignments for principal $identityPrincipalId on $LabRgName — nothing to clean up." -ForegroundColor DarkGray
-        } else {
+        }
+        else {
             Write-Host "Role assignments to remove on ${LabRgName}:" -ForegroundColor Cyan
             $assignments | ForEach-Object { Write-Host ("  - {0,-25} {1}" -f $_.role, $_.id) }
             if ($PSCmdlet.ShouldProcess($LabRgName, "remove $($assignments.Count) role assignment(s) for principal $identityPrincipalId")) {
@@ -141,7 +145,8 @@ if ($identityPrincipalId) {
                         az role assignment delete --ids $a.id | Out-Null
                         Write-Host "  removed: $($a.role)" -ForegroundColor Green
                     }
-                } else { Write-Host "Skipped role-assignment cleanup." -ForegroundColor Yellow }
+                }
+                else { Write-Host "Skipped role-assignment cleanup." -ForegroundColor Yellow }
             }
         }
     }
@@ -158,15 +163,17 @@ if ($rgExists) {
         if (Confirm-Step "DELETE resource group '$RgName' AND ALL RESOURCES IN IT?") {
             $waitFlag = if ($NoWait) { '--no-wait' } else { $null }
             Write-Host "Deleting $RgName (this can take 5-15 minutes)..." -ForegroundColor Cyan
-            $args = @('group','delete','--name',$RgName,'--yes')
+            $args = @('group', 'delete', '--name', $RgName, '--yes')
             if ($waitFlag) { $args += $waitFlag }
             az @args
             if ($NoWait) {
                 Write-Host "Delete dispatched. Track with: az group show -n $RgName --query properties.provisioningState" -ForegroundColor DarkGray
-            } else {
+            }
+            else {
                 Write-Host "Resource group deleted." -ForegroundColor Green
             }
-        } else { Write-Host "Skipped RG delete." -ForegroundColor Yellow }
+        }
+        else { Write-Host "Skipped RG delete." -ForegroundColor Yellow }
     }
 }
 
@@ -187,7 +194,8 @@ if ($entraAppId -and -not $KeepEntraApp) {
             if (Confirm-Step "Delete Entra app registration '$appName'?") {
                 az ad app delete --id $entraAppId
                 Write-Host "Entra app deleted (service principal + grants removed automatically)." -ForegroundColor Green
-            } else { Write-Host "Skipped Entra app delete." -ForegroundColor Yellow }
+            }
+            else { Write-Host "Skipped Entra app delete." -ForegroundColor Yellow }
         }
     }
 }
@@ -199,13 +207,14 @@ if (-not $KeepSecretsFile -and (Test-Path $secretsFile)) {
         if (Confirm-Step "Delete $secretsFile ?") {
             Remove-Item $secretsFile -Force
             Write-Host "Secrets file removed." -ForegroundColor Green
-        } else { Write-Host "Kept $secretsFile." -ForegroundColor Yellow }
+        }
+        else { Write-Host "Kept $secretsFile." -ForegroundColor Yellow }
     }
 }
 
 Write-Host "`n=== Teardown complete ===" -ForegroundColor Green
 Write-Host "To redeploy from scratch:" -ForegroundColor DarkGray
-Write-Host "  ./azure/scripts/setup-entra.ps1"
 Write-Host "  ./azure/scripts/deploy.ps1"
+Write-Host "  ./azure/scripts/setup-entra.ps1"
 Write-Host "  ./azure/scripts/build-and-push.ps1"
 Write-Host "  ./azure/scripts/deploy-apps.ps1"
